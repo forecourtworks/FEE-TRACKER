@@ -148,21 +148,34 @@
       const allPays = state.payments.filter(p => p.childId === childId && (parseInt(p.date.slice(0,4)) === year || p.allocate === 'arrears'));
       const paidTotal = sumPayments(allPays);
 
-      const termPaid = [1,2,3].map(t => {
-        const pays = getPaymentsFor(childId, year, t);
-        return sumPayments(pays);
+      // Explicit allocation first (respects user choice of term / arrears / current)
+      let arrearsCleared = 0;
+      const termCleared = [0, 0, 0];
+      const currentTerm = getCurrentTerm(year);
+
+      allPays.forEach(p => {
+        const amt = Number(p.amount || 0);
+        if (p.allocate === 'arrears') {
+          arrearsCleared += amt;
+        } else if (p.allocate === 'current') {
+          termCleared[currentTerm - 1] += amt;
+        } else if (p.allocate === 'term1') {
+          termCleared[0] += amt;
+        } else if (p.allocate === 'term2') {
+          termCleared[1] += amt;
+        } else if (p.allocate === 'term3') {
+          termCleared[2] += amt;
+        } else {
+          // Fallback: put into current term
+          termCleared[currentTerm - 1] += amt;
+        }
       });
 
-      // Simple allocation: arrears first, then terms in order
-      let remainingPaid = paidTotal;
-      let arrearsCleared = Math.min(arrears, remainingPaid);
-      remainingPaid -= arrearsCleared;
-      const termCleared = [0,0,0];
-      for (let t = 0; t < 3; t++) {
-        const due = [fees.term1, fees.term2, fees.term3][t];
-        termCleared[t] = Math.min(due, remainingPaid);
-        remainingPaid -= termCleared[t];
-      }
+      // Cap cleared amounts at the actual dues
+      arrearsCleared = Math.min(arrears, arrearsCleared);
+      termCleared[0] = Math.min(fees.term1, termCleared[0]);
+      termCleared[1] = Math.min(fees.term2, termCleared[1]);
+      termCleared[2] = Math.min(fees.term3, termCleared[2]);
 
       const totalDue = arrears + fees.yearly;
       const balance = Math.max(0, totalDue - paidTotal);
