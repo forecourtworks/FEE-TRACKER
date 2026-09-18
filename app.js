@@ -351,6 +351,7 @@
               <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
                 <button class="btn btn-primary btn-sm" onclick="openPaymentModal('${child.id}')">+ Payment</button>
                 <button class="btn btn-outline btn-sm" onclick="showChildDetail('${child.id}')">Full History</button>
+                <button class="btn btn-outline btn-sm" onclick="openSettings()">Set Arrears / Fees</button>
               </div>
             </div>
           </div>
@@ -528,26 +529,36 @@
       const editor = document.getElementById('feeEditor');
       editor.innerHTML = state.children.map(c => {
         const f = getChildFees(c.id, state.year);
+        const arr = getArrears(c.id, state.year);
         return `
-          <div style="margin-bottom:1rem;padding:0.75rem;background:#f7fafc;border-radius:8px">
-            <strong>${c.name}</strong>
-            <div class="form-row" style="margin-top:0.5rem">
+          <div style="margin-bottom:1.25rem;padding:1rem;background:#f7fafc;border-radius:8px;border:1px solid var(--border)">
+            <strong style="font-size:1rem">${c.name}</strong>
+            <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">${c.school} • ${c.class}</div>
+
+            <div style="margin-bottom:0.75rem;padding:0.6rem;background:#fff7ed;border-radius:6px;border-left:3px solid var(--accent)">
+              <label style="font-weight:700;color:#9a3412">Opening Arrears (KES) — brought forward into ${state.year}</label>
+              <input type="number" min="0" step="1" data-child="${c.id}" data-field="arrears"
+                     value="${arr}" style="width:100%;margin-top:0.35rem;padding:0.5rem;border:1px solid #fdba74;border-radius:6px;font-size:1rem;font-weight:600">
+              <small style="color:var(--muted)">Set any unpaid balance from previous year/term here. Payments allocated to Arrears will reduce this figure.</small>
+            </div>
+
+            <div class="form-row">
               <div class="form-group" style="margin:0">
-                <label>Term 1</label>
+                <label>Term 1 Fee</label>
                 <input type="number" data-child="${c.id}" data-field="term1" value="${f.term1}">
               </div>
               <div class="form-group" style="margin:0">
-                <label>Term 2</label>
+                <label>Term 2 Fee</label>
                 <input type="number" data-child="${c.id}" data-field="term2" value="${f.term2}">
               </div>
             </div>
             <div class="form-row">
               <div class="form-group" style="margin:0">
-                <label>Term 3</label>
+                <label>Term 3 Fee</label>
                 <input type="number" data-child="${c.id}" data-field="term3" value="${f.term3}">
               </div>
               <div class="form-group" style="margin:0">
-                <label>Yearly (auto-sum or override)</label>
+                <label>Yearly Total (auto or override)</label>
                 <input type="number" data-child="${c.id}" data-field="yearly" value="${f.yearly}">
               </div>
             </div>
@@ -555,19 +566,28 @@
         `;
       }).join('');
 
-      // Attach change listeners
+      // Attach change listeners for fees + arrears
       editor.querySelectorAll('input').forEach(inp => {
         inp.addEventListener('change', () => {
           const childId = inp.dataset.child;
           const field = inp.dataset.field;
-          const val = Number(inp.value) || 0;
+          const val = Math.max(0, Number(inp.value) || 0);
+
+          if (field === 'arrears') {
+            if (!state.arrears[childId]) state.arrears[childId] = {};
+            state.arrears[childId][state.year] = val;
+            saveState();
+            return;
+          }
+
           const child = state.children.find(c => c.id === childId);
           if (!child.fees[state.year]) child.fees[state.year] = {};
           child.fees[state.year][field] = val;
-          // Auto update yearly if term changed
+
+          // Auto-update yearly when a term fee changes
           if (field.startsWith('term')) {
             const f = child.fees[state.year];
-            f.yearly = (f.term1||0) + (f.term2||0) + (f.term3||0);
+            f.yearly = (Number(f.term1) || 0) + (Number(f.term2) || 0) + (Number(f.term3) || 0);
             const yearlyInp = editor.querySelector(`input[data-child="${childId}"][data-field="yearly"]`);
             if (yearlyInp) yearlyInp.value = f.yearly;
           }
