@@ -1,3 +1,4 @@
+<script>
     // ===================== DATA MODEL =====================
     const DEFAULT_YEAR = 2026;
     const STORAGE_KEY = 'oguta_fees_v1';
@@ -46,6 +47,9 @@
       arrears: {}   // { childId: { [year]: amount } }
     };
 
+    // Tracking state for editing existing records
+    let editingPaymentId = null;
+
     // ===================== UTILITIES =====================
     function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
     function formatKES(n) {
@@ -72,7 +76,6 @@
     }
 
     function getTermDueDate(year, term, instalment = 1) {
-      // instalment 1,2,3 within term
       const td = TERM_DATES[term];
       if (!td) return null;
       const month = td.months[instalment - 1];
@@ -86,7 +89,6 @@
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) {
           state = JSON.parse(raw);
-          // Ensure defaults exist
           if (!state.children || state.children.length === 0) {
             state.children = JSON.parse(JSON.stringify(DEFAULT_CHILDREN));
           }
@@ -148,7 +150,6 @@
       const allPays = state.payments.filter(p => p.childId === childId && (parseInt(p.date.slice(0,4)) === year || p.allocate === 'arrears'));
       const paidTotal = sumPayments(allPays);
 
-      // Explicit allocation first (respects user choice of term / arrears / current)
       let arrearsCleared = 0;
       const termCleared = [0, 0, 0];
       const currentTerm = getCurrentTerm(year);
@@ -166,12 +167,10 @@
         } else if (p.allocate === 'term3') {
           termCleared[2] += amt;
         } else {
-          // Fallback: put into current term
           termCleared[currentTerm - 1] += amt;
         }
       });
 
-      // Cap cleared amounts at the actual dues
       arrearsCleared = Math.min(arrears, arrearsCleared);
       termCleared[0] = Math.min(fees.term1, termCleared[0]);
       termCleared[1] = Math.min(fees.term2, termCleared[1]);
@@ -197,14 +196,12 @@
       let oldestOverdueDays = 0;
       let overdueAmount = 0;
 
-      // Check monthly instalments for current and past terms
       for (let t = 1; t <= currentTerm; t++) {
         const termDue = [fees.term1, fees.term2, fees.term3][t-1];
         const instalment = termDue / 3;
         for (let i = 1; i <= 3; i++) {
           const dueDate = getTermDueDate(year, t, i);
           if (!dueDate || dueDate > today) continue;
-          // Rough check: if cumulative paid for term is less than instalments due
           const paidForTerm = summary.termPaid[t-1];
           const expectedByNow = instalment * i;
           if (paidForTerm < expectedByNow - 1) {
@@ -214,7 +211,6 @@
           }
         }
       }
-      // Also arrears
       if (summary.arrears > summary.arrearsCleared) {
         oldestOverdueDays = Math.max(oldestOverdueDays, 60);
         overdueAmount += (summary.arrears - summary.arrearsCleared);
@@ -236,7 +232,6 @@
       const ct = getCurrentTerm();
       document.getElementById('currentTermLabel').textContent = `Term ${ct} ${state.year}`;
 
-      // Year selector
       const ys = document.getElementById('yearSelect');
       ys.innerHTML = '';
       for (let y = state.year - 2; y <= state.year + 2; y++) {
@@ -297,7 +292,6 @@
         const termDue = s.termDue[currentTerm - 1];
         const termPaid = s.termPaid[currentTerm - 1];
         const termBal = Math.max(0, termDue - termPaid);
-        const termPct = termDue > 0 ? Math.round((termPaid / termDue) * 100) : 100;
 
         let statusBadge = '<span class="badge badge-ok">Up to date</span>';
         if (s.balance > 0 && od.oldestOverdueDays > 0) {
@@ -372,6 +366,7 @@
           .filter(p => p.childId === child.id)
           .sort((a,b) => b.date.localeCompare(a.date));
 
+        // Added Actions column to rows
         const rows = pays.length ? pays.map(p => `
           <tr>
             <td>${p.date}</td>
@@ -381,8 +376,12 @@
             <td>${p.allocate === 'arrears' ? 'Arrears' : p.allocate === 'current' ? 'Current Term' : p.allocate.replace('term','Term ')}</td>
             <td>${p.notes || '—'}</td>
             <td>${p.receiptBase64 ? '<span title="Receipt attached">📎</span>' : '—'}</td>
+            <td>
+              <button class="btn btn-outline btn-sm" onclick="editPayment('${p.id}')">Edit</button>
+              <button class="btn btn-outline btn-sm" style="color:#e74c3c;border-color:#e74c3c" onclick="deletePayment('${p.id}')">Delete</button>
+            </td>
           </tr>
-        `).join('') : `<tr><td colspan="7" class="empty-state">No payments recorded yet</td></tr>`;
+        `).join('') : `<tr><td colspan="8" class="empty-state">No payments recorded yet</td></tr>`;
 
         return `
           <div class="panel ${i===0?'active':''}" id="panel-${child.id}">
@@ -398,7 +397,7 @@
                 <table>
                   <thead>
                     <tr>
-                      <th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Allocated</th><th>Notes</th><th>Receipt</th>
+                      <th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Allocated</th><th>Notes</th><th>Receipt</th><th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>${rows}</tbody>
@@ -423,6 +422,7 @@
 
     // ===================== ACTIONS =====================
     function openPaymentModal(childId) {
+      editingPaymentId = null; // Reset edit tracker on new open
       populatePaymentForm();
       if (childId) document.getElementById('payChild').value = childId;
       document.getElementById('payAmount').value = '';
@@ -432,7 +432,36 @@
       document.getElementById('paymentModal').classList.add('open');
     }
 
+    // Edit payment population function
+    function editPayment(paymentId) {
+      const payment = state.payments.find(p => p.id === paymentId);
+      if (!payment) return;
+
+      editingPaymentId = paymentId;
+      populatePaymentForm();
+
+      document.getElementById('payChild').value = payment.childId;
+      document.getElementById('payAmount').value = payment.amount;
+      document.getElementById('payDate').value = payment.date;
+      document.getElementById('payMethod').value = payment.method;
+      document.getElementById('payRef').value = payment.ref || '';
+      document.getElementById('payAllocate').value = payment.allocate || 'current';
+      document.getElementById('payNotes').value = payment.notes || '';
+
+      document.getElementById('paymentModal').classList.add('open');
+    }
+
+    // Delete payment function
+    function deletePayment(paymentId) {
+      if (confirm('Are you sure you want to delete this payment record?')) {
+        state.payments = state.payments.filter(p => p.id !== paymentId);
+        saveState();
+        renderAll();
+      }
+    }
+
     function closeModal(id) {
+      editingPaymentId = null;
       document.getElementById(id).classList.remove('open');
     }
 
@@ -451,262 +480,21 @@
         return;
       }
 
-      const payment = {
-        id: uid(),
+      const paymentData = {
         childId,
         amount,
         date,
         method,
         ref,
         allocate,
-        notes,
-        receiptBase64: null,
-        createdAt: new Date().toISOString()
+        notes
       };
 
       if (fileInput.files && fileInput.files[0]) {
         const reader = new FileReader();
         reader.onload = function(e) {
-          payment.receiptBase64 = e.target.result;
-          finalizePayment(payment);
+          paymentData.receiptBase64 = e.target.result;
+          finalizePayment(paymentData);
         };
         reader.readAsDataURL(fileInput.files[0]);
-      } else {
-        finalizePayment(payment);
-      }
-    }
-
-    function finalizePayment(payment) {
-      state.payments.push(payment);
-      // Simple arrears reduction if allocated to arrears
-      if (payment.allocate === 'arrears') {
-        const yr = state.year;
-        if (!state.arrears[payment.childId]) state.arrears[payment.childId] = {};
-        const currentArr = state.arrears[payment.childId][yr] || 0;
-        state.arrears[payment.childId][yr] = Math.max(0, currentArr - payment.amount);
-      }
-      saveState();
-      closeModal('paymentModal');
-      renderAll();
-    }
-
-    function showChildDetail(childId) {
-      const child = state.children.find(c => c.id === childId);
-      const s = getChildSummary(childId, state.year);
-      const od = getOverdueInfo(childId, state.year);
-      document.getElementById('detailTitle').textContent = child.name;
-      document.getElementById('detailBody').innerHTML = `
-        <p><strong>School:</strong> ${child.school}<br>
-        <strong>Class:</strong> ${child.class}<br>
-        <strong>Year:</strong> ${state.year}</p>
-        <div style="margin:1rem 0;display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-          <div>Yearly Fee: <strong>${formatKES(s.fees.yearly)}</strong></div>
-          <div>Arrears: <strong>${formatKES(s.arrears)}</strong></div>
-          <div>Paid: <strong class="amount paid">${formatKES(s.paidTotal)}</strong></div>
-          <div>Balance: <strong class="${s.balance>0?'amount due':'amount paid'}">${formatKES(s.balance)}</strong></div>
-          <div>Overdue Ageing: <strong>${od.ageing}</strong></div>
-        </div>
-        <p style="font-size:0.85rem;color:var(--muted)">Use the Detailed Accounts section below for full payment history and PDF export.</p>
-      `;
-      document.getElementById('detailModal').classList.add('open');
-    }
-
-    function switchYear(y) {
-      state.year = parseInt(y, 10);
-      // Ensure fee structure exists for new year (copy from nearest)
-      state.children.forEach(c => {
-        if (!c.fees[state.year]) {
-          const years = Object.keys(c.fees).map(Number).sort((a,b)=>b-a);
-          const src = years[0] || DEFAULT_YEAR;
-          c.fees[state.year] = { ...c.fees[src] };
-        }
-      });
-      saveState();
-      renderAll();
-    }
-
-    function openSettings() {
-      const editor = document.getElementById('feeEditor');
-      editor.innerHTML = state.children.map(c => {
-        const f = getChildFees(c.id, state.year);
-        const arr = getArrears(c.id, state.year);
-        return `
-          <div style="margin-bottom:1.25rem;padding:1rem;background:#f7fafc;border-radius:8px;border:1px solid var(--border)">
-            <strong style="font-size:1rem">${c.name}</strong>
-            <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">${c.school} • ${c.class}</div>
-
-            <div style="margin-bottom:0.75rem;padding:0.6rem;background:#fff7ed;border-radius:6px;border-left:3px solid var(--accent)">
-              <label style="font-weight:700;color:#9a3412">Opening Arrears (KES) — brought forward into ${state.year}</label>
-              <input type="number" min="0" step="1" data-child="${c.id}" data-field="arrears"
-                     value="${arr}" style="width:100%;margin-top:0.35rem;padding:0.5rem;border:1px solid #fdba74;border-radius:6px;font-size:1rem;font-weight:600">
-              <small style="color:var(--muted)">Set any unpaid balance from previous year/term here. Payments allocated to Arrears will reduce this figure.</small>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group" style="margin:0">
-                <label>Term 1 Fee</label>
-                <input type="number" data-child="${c.id}" data-field="term1" value="${f.term1}">
-              </div>
-              <div class="form-group" style="margin:0">
-                <label>Term 2 Fee</label>
-                <input type="number" data-child="${c.id}" data-field="term2" value="${f.term2}">
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group" style="margin:0">
-                <label>Term 3 Fee</label>
-                <input type="number" data-child="${c.id}" data-field="term3" value="${f.term3}">
-              </div>
-              <div class="form-group" style="margin:0">
-                <label>Yearly Total (auto or override)</label>
-                <input type="number" data-child="${c.id}" data-field="yearly" value="${f.yearly}">
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
-
-      // Attach change listeners for fees + arrears
-      editor.querySelectorAll('input').forEach(inp => {
-        inp.addEventListener('change', () => {
-          const childId = inp.dataset.child;
-          const field = inp.dataset.field;
-          const val = Math.max(0, Number(inp.value) || 0);
-
-          if (field === 'arrears') {
-            if (!state.arrears[childId]) state.arrears[childId] = {};
-            state.arrears[childId][state.year] = val;
-            saveState();
-            return;
-          }
-
-          const child = state.children.find(c => c.id === childId);
-          if (!child.fees[state.year]) child.fees[state.year] = {};
-          child.fees[state.year][field] = val;
-
-          // Auto-update yearly when a term fee changes
-          if (field.startsWith('term')) {
-            const f = child.fees[state.year];
-            f.yearly = (Number(f.term1) || 0) + (Number(f.term2) || 0) + (Number(f.term3) || 0);
-            const yearlyInp = editor.querySelector(`input[data-child="${childId}"][data-field="yearly"]`);
-            if (yearlyInp) yearlyInp.value = f.yearly;
-          }
-          saveState();
-        });
-      });
-
-      document.getElementById('settingsModal').classList.add('open');
-    }
-
-    function exportData() {
-      const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `oguta-fees-backup-${todayISO()}.json`;
-      a.click();
-    }
-
-    function importData(evt) {
-      const file = evt.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = e => {
-        try {
-          const data = JSON.parse(e.target.result);
-          if (data.children && data.payments) {
-            state = data;
-            saveState();
-            renderAll();
-            alert('Data imported successfully.');
-          } else {
-            alert('Invalid backup file.');
-          }
-        } catch (err) {
-          alert('Failed to import: ' + err.message);
-        }
-      };
-      reader.readAsText(file);
-    }
-
-    function resetData() {
-      state = {
-        year: DEFAULT_YEAR,
-        children: JSON.parse(JSON.stringify(DEFAULT_CHILDREN)),
-        payments: [],
-        arrears: {}
-      };
-      saveState();
-      renderAll();
-      closeModal('settingsModal');
-    }
-
-    function exportPDF() {
-      const { jsPDF } = window.jspdf;
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.getWidth();
-
-      doc.setFontSize(16);
-      doc.setTextColor(26, 54, 93);
-      doc.text('OGUTA Family School Fees Statement', pageWidth / 2, 18, { align: 'center' });
-      doc.setFontSize(10);
-      doc.setTextColor(100);
-      doc.text(`Academic Year ${state.year}  •  Generated ${new Date().toLocaleDateString('en-KE')}`, pageWidth / 2, 25, { align: 'center' });
-
-      let y = 35;
-      state.children.forEach((child, idx) => {
-        if (y > 250) { doc.addPage(); y = 20; }
-        const s = getChildSummary(child.id, state.year);
-        doc.setFontSize(12);
-        doc.setTextColor(26, 54, 93);
-        doc.text(`${child.name} — ${child.school}`, 14, y);
-        y += 6;
-        doc.setFontSize(9);
-        doc.setTextColor(60);
-        doc.text(`Class: ${child.class}  |  Yearly: ${formatKES(s.fees.yearly)}  |  Arrears: ${formatKES(s.arrears)}  |  Paid: ${formatKES(s.paidTotal)}  |  Balance: ${formatKES(s.balance)}`, 14, y);
-        y += 8;
-
-        const pays = state.payments
-          .filter(p => p.childId === child.id)
-          .sort((a,b) => a.date.localeCompare(b.date));
-
-        if (pays.length) {
-          const body = pays.map(p => [
-            p.date,
-            formatKES(p.amount),
-            p.method,
-            p.ref || '—',
-            p.allocate === 'arrears' ? 'Arrears' : p.allocate
-          ]);
-          doc.autoTable({
-            startY: y,
-            head: [['Date', 'Amount', 'Method', 'Reference', 'Allocated']],
-            body,
-            theme: 'striped',
-            headStyles: { fillColor: [26, 54, 93], fontSize: 8 },
-            bodyStyles: { fontSize: 8 },
-            margin: { left: 14, right: 14 },
-            styles: { cellPadding: 2 }
-          });
-          y = doc.lastAutoTable.finalY + 12;
-        } else {
-          doc.text('No payments recorded.', 14, y);
-          y += 12;
-        }
-      });
-
-      doc.setFontSize(8);
-      doc.setTextColor(150);
-      doc.text('OGUTA Family Fees Tracker — For internal family use only', pageWidth / 2, doc.internal.pageSize.getHeight() - 10, { align: 'center' });
-      doc.save(`OGUTA-Fees-Statement-${state.year}-${todayISO()}.pdf`);
-    }
-
-    // ===================== INIT =====================
-    loadState();
-    renderAll();
-
-    // Close modals on overlay click
-    document.querySelectorAll('.modal-overlay').forEach(el => {
-      el.addEventListener('click', e => {
-        if (e.target === el) el.classList.remove('open');
-      });
-    });
+      } else
