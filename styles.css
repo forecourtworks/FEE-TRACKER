@@ -264,8 +264,151 @@
       display: flex;
       gap: 0.35rem;
       flex-wrap: wrap;
+      min-width: 140px;
     }
     .actions-cell .btn { flex-shrink: 0; }
+    .btn-edit { border-color: var(--secondary); color: var(--secondary); }
+    .btn-edit:hover { background: var(--secondary); color: white; }
+    .btn-delete { min-width: 4.5rem; }
+    .receipt-badge {
+      color: var(--secondary);
+      font-weight: 600;
+      font-size: 0.8rem;
+    }
+
+    /* Child detail panel */
+    .child-panel {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 1.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .child-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .child-panel-header h3 {
+      font-size: 1.15rem;
+      margin: 0;
+    }
+    .child-panel-sub {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 0.2rem;
+    }
+    .child-panel-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .stat-box {
+      background: #f7fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 0.9rem;
+    }
+    .stat-box.highlight {
+      background: #ebf8ff;
+      border-color: #bee3f8;
+    }
+    .stat-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--muted);
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+    .stat-value {
+      font-size: 1.15rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.2rem;
+    }
+    .payment-list-title {
+      margin: 0 0 0.25rem;
+      font-size: 1rem;
+    }
+    .payment-list-hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+
+    /* Mobile payment cards — hidden on desktop */
+    .mobile-payments { display: none; }
+    .payment-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.9rem;
+      margin-bottom: 0.65rem;
+      background: #fff;
+    }
+    .payment-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .payment-card-date {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .payment-card-amount {
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+    .payment-card-actions {
+      display: flex;
+      gap: 0.35rem;
+      flex-shrink: 0;
+    }
+    .payment-card-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+
+    /* Toast confirmation */
+    .app-toast {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(120%);
+      background: #22543d;
+      color: white;
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+      z-index: 2000;
+      opacity: 0;
+      transition: transform 0.25s ease, opacity 0.25s ease;
+      max-width: 90vw;
+      text-align: center;
+      pointer-events: none;
+    }
+    .app-toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+    .app-toast.danger {
+      background: #742a2a;
+    }
+
     .empty-state {
       text-align: center;
       color: var(--muted);
@@ -372,8 +515,17 @@
       color: white;
       font-weight: 600;
     }
-    @media (max-width: 600px) {
+    @media (max-width: 768px) {
       .form-row { grid-template-columns: 1fr; }
       .child-grid { grid-template-columns: 1fr; }
       .header { padding: 0.85rem 1rem; }
+      .summary-bar { grid-template-columns: 1fr 1fr; }
+      .child-panel-stats { grid-template-columns: 1fr 1fr; }
+      .desktop-payments { display: none; }
+      .mobile-payments { display: block; }
+      .header-actions .btn { padding: 0.4rem 0.65rem; font-size: 0.8rem; }
+    }
+    @media (max-width: 420px) {
+      .summary-bar { grid-template-columns: 1fr; }
+      .child-panel-stats { grid-template-columns: 1fr; }
     }

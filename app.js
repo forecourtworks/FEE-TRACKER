@@ -48,6 +48,8 @@
 
     // Tracks which payment is being edited (null = new payment)
     let editingPaymentId = null;
+    // Remember which child tab is open across re-renders
+    let activeChildTabId = null;
 
     // ===================== UTILITIES =====================
     function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -468,57 +470,136 @@
       }).join('');
     }
 
+    function formatAllocate(alloc) {
+      if (!alloc) return '—';
+      if (alloc === 'arrears') return 'Arrears';
+      if (alloc === 'current') return 'Current Term';
+      if (alloc.startsWith('term')) return 'Term ' + alloc.replace('term', '');
+      return alloc;
+    }
+
     function renderDetailTabs() {
       const tabs = document.getElementById('childTabs');
       const panels = document.getElementById('detailPanels');
-      const activeTab = document.querySelector('.tab.active');
-      const activeChildId = activeTab ? activeTab.dataset.child : (state.children[0] && state.children[0].id);
+
+      if (!activeChildTabId || !state.children.some(c => c.id === activeChildTabId)) {
+        activeChildTabId = state.children[0] ? state.children[0].id : null;
+      }
+      const activeChildId = activeChildTabId;
 
       tabs.innerHTML = state.children.map((c) =>
-        `<button class="tab ${c.id === activeChildId ? 'active' : ''}" onclick="switchTab('${c.id}')" data-child="${c.id}">${c.name.split(' ')[0]}</button>`
+        `<button type="button" class="tab ${c.id === activeChildId ? 'active' : ''}" onclick="switchTab('${c.id}')" data-child="${c.id}">${c.name.split(' ')[0]}</button>`
       ).join('');
 
       panels.innerHTML = state.children.map((child) => {
         const s = getChildSummary(child.id, state.year);
         const pays = state.payments
           .filter(p => p.childId === child.id)
-          .sort((a,b) => b.date.localeCompare(a.date));
+          .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
 
-        const rows = pays.length ? pays.map(p => `
-          <tr>
-            <td>${p.date}</td>
-            <td class="amount paid">${formatKES(p.amount)}</td>
-            <td>${p.method}</td>
-            <td>${p.ref || '—'}</td>
-            <td>${p.allocate === 'arrears' ? 'Arrears' : p.allocate === 'current' ? 'Current Term' : (p.allocate || '').replace('term','Term ')}</td>
-            <td>${p.notes || '—'}</td>
-            <td>${p.receiptBase64 ? '<span title="Receipt attached">📎</span>' : '—'}</td>
-            <td class="actions-cell">
-              <button class="btn btn-sm btn-outline" onclick="editPayment('${p.id}')" title="Edit payment">Edit</button>
-              <button class="btn btn-sm btn-danger" onclick="deletePayment('${p.id}')" title="Delete payment">Delete</button>
+        const allTimeTotal = sumPayments(pays);
+        const openArrears = Math.max(0, s.arrears - s.arrearsCleared);
+
+        // Desktop table rows
+        const tableRows = pays.length ? pays.map(p => `
+          <tr data-payment-id="${p.id}">
+            <td data-label="Date">${p.date}</td>
+            <td data-label="Amount" class="amount paid">${formatKES(p.amount)}</td>
+            <td data-label="Method">${p.method || '—'}</td>
+            <td data-label="Allocation">${formatAllocate(p.allocate)}</td>
+            <td data-label="Reference">${p.ref || '—'}</td>
+            <td data-label="Notes">${p.notes ? escapeHtml(p.notes) : '—'}</td>
+            <td data-label="Receipt">${p.receiptBase64 ? '<span class="receipt-badge" title="Receipt attached">📎 Yes</span>' : '—'}</td>
+            <td data-label="Actions" class="actions-cell">
+              <button type="button" class="btn btn-sm btn-outline btn-edit" onclick="editPayment('${p.id}')">Edit</button>
+              <button type="button" class="btn btn-sm btn-danger btn-delete" onclick="deletePayment('${p.id}')">Delete</button>
             </td>
           </tr>
-        `).join('') : `<tr><td colspan="8" class="empty-state">No payments recorded yet</td></tr>`;
+        `).join('') : `<tr><td colspan="8" class="empty-state">No payments recorded for ${child.name.split(' ')[0]} yet.<br><button type="button" class="btn btn-sm btn-primary" style="margin-top:0.75rem" onclick="openPaymentModal('${child.id}')">+ Record first payment</button></td></tr>`;
+
+        // Mobile-friendly payment cards (shown via CSS on small screens)
+        const mobileCards = pays.length ? pays.map(p => `
+          <div class="payment-card" data-payment-id="${p.id}">
+            <div class="payment-card-top">
+              <div>
+                <div class="payment-card-date">${p.date}</div>
+                <div class="payment-card-amount amount paid">${formatKES(p.amount)}</div>
+              </div>
+              <div class="payment-card-actions">
+                <button type="button" class="btn btn-sm btn-outline" onclick="editPayment('${p.id}')">Edit</button>
+                <button type="button" class="btn btn-sm btn-danger" onclick="deletePayment('${p.id}')">Delete</button>
+              </div>
+            </div>
+            <div class="payment-card-meta">
+              <span><strong>Method:</strong> ${p.method || '—'}</span>
+              <span><strong>Allocated:</strong> ${formatAllocate(p.allocate)}</span>
+              ${p.ref ? `<span><strong>Ref:</strong> ${escapeHtml(p.ref)}</span>` : ''}
+              ${p.notes ? `<span><strong>Notes:</strong> ${escapeHtml(p.notes)}</span>` : ''}
+              ${p.receiptBase64 ? '<span class="receipt-badge">📎 Receipt attached</span>' : ''}
+            </div>
+          </div>
+        `).join('') : `
+          <div class="empty-state">
+            No payments recorded for ${child.name.split(' ')[0]} yet.
+            <br>
+            <button type="button" class="btn btn-sm btn-primary" style="margin-top:0.75rem" onclick="openPaymentModal('${child.id}')">+ Record first payment</button>
+          </div>`;
 
         return `
           <div class="panel ${child.id === activeChildId ? 'active' : ''}" id="panel-${child.id}">
-            <div style="background:var(--card);border-radius:10px;padding:1.25rem;box-shadow:0 1px 3px rgba(0,0,0,0.08)">
-              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:1.25rem">
-                <div><strong>Yearly Fee</strong><br>${formatKES(s.fees.yearly)}</div>
-                <div><strong>Arrears</strong><br>${formatKES(s.arrears)}</div>
-                <div><strong>Paid YTD</strong><br>${formatKES(s.paidTotal)}</div>
-                <div><strong>Balance</strong><br><span class="${s.balance>0?'amount due':'amount paid'}">${formatKES(s.balance)}</span></div>
+            <div class="child-panel">
+              <div class="child-panel-header">
+                <div>
+                  <h3>${child.name}</h3>
+                  <p class="child-panel-sub">${child.school} · ${child.class} · ${state.year}</p>
+                </div>
+                <button type="button" class="btn btn-primary btn-sm" onclick="openPaymentModal('${child.id}')">+ Payment</button>
               </div>
-              <h4 style="margin-bottom:0.75rem">Payment History</h4>
-              <div class="table-wrap">
-                <table>
+
+              <div class="child-panel-stats">
+                <div class="stat-box">
+                  <div class="stat-label">Yearly Fee</div>
+                  <div class="stat-value">${formatKES(s.fees.yearly)}</div>
+                </div>
+                <div class="stat-box">
+                  <div class="stat-label">Open Arrears</div>
+                  <div class="stat-value ${openArrears > 0 ? 'amount due' : 'amount paid'}">${formatKES(openArrears)}</div>
+                </div>
+                <div class="stat-box highlight">
+                  <div class="stat-label">Total Payments</div>
+                  <div class="stat-value amount paid">${formatKES(s.paidTotal)}</div>
+                  <div class="stat-hint">${pays.length} entr${pays.length === 1 ? 'y' : 'ies'} · all-time ${formatKES(allTimeTotal)}</div>
+                </div>
+                <div class="stat-box highlight">
+                  <div class="stat-label">Outstanding Balance</div>
+                  <div class="stat-value ${s.balance > 0 ? 'amount due' : 'amount paid'}">${formatKES(s.balance)}</div>
+                  <div class="stat-hint">${s.balance === 0 ? 'Fully cleared' : 'Still owing'}</div>
+                </div>
+              </div>
+
+              <h4 class="payment-list-title">Payments for ${child.name.split(' ')[0]}</h4>
+              <p class="payment-list-hint">Date · Amount · Method · Allocation — use Edit or Delete on any row</p>
+
+              <div class="table-wrap desktop-payments">
+                <table class="payments-table">
                   <thead>
                     <tr>
-                      <th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Allocated</th><th>Notes</th><th>Receipt</th><th>Actions</th>
+                      <th>Date</th>
+                      <th>Amount</th>
+                      <th>Method</th>
+                      <th>Allocation</th>
+                      <th>Reference</th>
+                      <th>Notes</th>
+                      <th>Receipt</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
-                  <tbody>${rows}</tbody>
+                  <tbody>${tableRows}</tbody>
                 </table>
+              </div>
+
+              <div class="mobile-payments">
+                ${mobileCards}
               </div>
             </div>
           </div>
@@ -526,9 +607,33 @@
       }).join('');
     }
 
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
     function switchTab(childId) {
+      activeChildTabId = childId;
       document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.child === childId));
       document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === `panel-${childId}`));
+    }
+
+    function showToast(message, type) {
+      let el = document.getElementById('appToast');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'appToast';
+        el.className = 'app-toast';
+        document.body.appendChild(el);
+      }
+      el.className = 'app-toast ' + (type || 'success');
+      el.textContent = message;
+      el.classList.add('show');
+      clearTimeout(el._hideTimer);
+      el._hideTimer = setTimeout(() => el.classList.remove('show'), 2800);
     }
 
     function populatePaymentForm() {
@@ -586,9 +691,11 @@
         return;
       }
       reverseArrearsEffect(p);
+      activeChildTabId = p.childId;
       state.payments = state.payments.filter(x => x.id !== paymentId);
       saveState();
       renderAll();
+      showToast(`Payment of ${formatKES(p.amount)} deleted.`, 'danger');
     }
 
     function closeModal(id) {
@@ -643,6 +750,9 @@
     }
 
     function finalizePayment(paymentData) {
+      const wasEdit = !!editingPaymentId;
+      let targetChildId = paymentData.childId;
+
       if (editingPaymentId) {
         const idx = state.payments.findIndex(x => x.id === editingPaymentId);
         if (idx === -1) {
@@ -665,6 +775,7 @@
         }
         state.payments[idx] = updated;
         applyArrearsEffect(updated);
+        targetChildId = updated.childId;
         editingPaymentId = null;
       } else {
         const payment = {
@@ -675,11 +786,19 @@
         };
         state.payments.push(payment);
         applyArrearsEffect(payment);
+        targetChildId = payment.childId;
       }
 
+      activeChildTabId = targetChildId;
       saveState();
       closeModal('paymentModal');
       renderAll();
+      showToast(
+        wasEdit
+          ? `Payment updated — ${formatKES(paymentData.amount)} saved.`
+          : `Payment recorded — ${formatKES(paymentData.amount)} confirmed.`,
+        'success'
+      );
     }
 
     function showChildDetail(childId) {
