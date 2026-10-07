@@ -92,23 +92,23 @@
           </div>
         </div>
         <div class="form-group">
-          <label>Allocate to</label>
+          <label>Allocate to term</label>
           <select id="payAllocate">
-            <option value="arrears">Arrears (if any)</option>
-            <option value="current">Current Term</option>
             <option value="term1">Term 1</option>
             <option value="term2">Term 2</option>
             <option value="term3">Term 3</option>
+            <option value="arrears">Arrears (counts under Term 1)</option>
           </select>
+          <small style="color:var(--muted);font-size:0.75rem">Within each term, payments clear arrears first, then the term fee. Surplus credits the next term.</small>
         </div>
         <div class="form-group">
-          <label>Notes (optional)</label>
-          <textarea id="payNotes" rows="2" placeholder="Any additional notes"></textarea>
+          <label>Payment confirmation (M-Pesa / Bank message)</label>
+          <textarea id="payNotes" rows="3" placeholder="Paste M-Pesa or bank confirmation message here"></textarea>
         </div>
         <div class="form-group">
-          <label>Receipt / Proof (photo or PDF)</label>
+          <label>Receipt from school (photo or PDF)</label>
           <input type="file" id="payFile" accept="image/*,.pdf">
-          <small style="color:var(--muted);font-size:0.75rem">Stored locally as base64 (keep files small)</small>
+          <small style="color:var(--muted);font-size:0.75rem">Stored locally on this device (keep files reasonably small)</small>
         </div>
       </div>
       <div class="modal-footer">

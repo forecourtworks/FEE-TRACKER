@@ -1,6 +1,7 @@
     // ===================== DATA MODEL =====================
     const DEFAULT_YEAR = 2026;
-    const STORAGE_KEY = 'oguta_fees_v1';
+    // v2: fresh data model — fees start at 0; user enters all figures
+    const STORAGE_KEY = 'oguta_fees_v2';
 
     const DEFAULT_CHILDREN = [
       {
@@ -9,7 +10,7 @@
         school: "St. Joseph's Rapogi School",
         class: 'Secondary',
         fees: {
-          2026: { yearly: 61054, term1: 28777, term2: 18066, term3: 12011 }
+          2026: { yearly: 0, term1: 0, term2: 0, term3: 0 }
         }
       },
       {
@@ -18,7 +19,7 @@
         school: 'Christian Outreach Academy',
         class: 'Grade 3',
         fees: {
-          2026: { yearly: 33000, term1: 11000, term2: 11000, term3: 11000 }
+          2026: { yearly: 0, term1: 0, term2: 0, term3: 0 }
         }
       },
       {
@@ -27,7 +28,7 @@
         school: 'Christian Outreach Academy',
         class: 'Playgroup',
         fees: {
-          2026: { yearly: 27000, term1: 9000, term2: 9000, term3: 9000 }
+          2026: { yearly: 0, term1: 0, term2: 0, term3: 0 }
         }
       }
     ];
@@ -186,12 +187,126 @@
       const balance = Math.max(0, totalDue - paidTotal);
       const pct = totalDue > 0 ? Math.min(100, Math.round((paidTotal / totalDue) * 100)) : 100;
 
-      return {
-        fees, arrears, paidTotal, balance, pct,
-        termDue: [fees.term1, fees.term2, fees.term3],
-        termPaid: termCleared,
-        arrearsCleared
-      };
+      try {
+        const ledgers = getYearTermLedgers(childId, year);
+        const ledgerPaid = ledgers.terms.reduce((s, t) => s + t.totalPaid, 0);
+        const openArr = Math.max(0, ledgers.openingArrears);
+        const yearFees = (fees.term1 || 0) + (fees.term2 || 0) + (fees.term3 || 0);
+        const totalObligation = openArr + yearFees;
+        return {
+          fees,
+          arrears: openArr,
+          paidTotal: ledgerPaid,
+          balance: Math.max(0, ledgers.terms[2].balance),
+          pct: totalObligation > 0 ? Math.min(100, Math.round((ledgerPaid / totalObligation) * 100)) : 100,
+          termDue: [fees.term1, fees.term2, fees.term3],
+          termPaid: ledgers.terms.map(t => t.totalPaid),
+          arrearsCleared: Math.min(openArr, ledgers.terms[0].totalPaid)
+        };
+      } catch (e) {
+        return {
+          fees, arrears, paidTotal, balance, pct,
+          termDue: [fees.term1, fees.term2, fees.term3],
+          termPaid: termCleared,
+          arrearsCleared
+        };
+      }
+    }
+
+    /** Payments that belong to a given term for a child/year */
+    function getTermPayments(childId, year, term) {
+      const currentTerm = getCurrentTerm(year);
+      return state.payments
+        .filter(p => {
+          if (p.childId !== childId) return false;
+          const py = parseInt(p.date.slice(0, 4), 10);
+          // Arrears-only payments count under Term 1 of the year they clear
+          if (p.allocate === 'arrears') {
+            return term === 1 && (py === year || !py);
+          }
+          if (py !== year) return false;
+          if (p.allocate === `term${term}`) return true;
+          if (p.allocate === 'current' && currentTerm === term) return true;
+          return false;
+        })
+        .sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || ''));
+    }
+
+    /**
+     * Opening arrears for a year (may be negative = credit):
+     * - Manual value in state.arrears[childId][year] if set
+     * - Else for year > base: previous year Term 3 raw balance (positive arrears or negative credit)
+     * - Else 0
+     */
+    function getYearOpeningArrears(childId, year) {
+      if (state.arrears[childId]) {
+        if (Object.prototype.hasOwnProperty.call(state.arrears[childId], year)) {
+          return Number(state.arrears[childId][year]) || 0;
+        }
+        if (Object.prototype.hasOwnProperty.call(state.arrears[childId], String(year))) {
+          return Number(state.arrears[childId][String(year)]) || 0;
+        }
+      }
+      if (year > DEFAULT_YEAR) {
+        const prev = getYearTermLedgers(childId, year - 1);
+        // Carry raw close balance: positive = arrears, negative = credit
+        return prev.terms[2].rawBalance;
+      }
+      return 0;
+    }
+
+    /**
+     * Build Term 1–3 ledgers for a child and year.
+     * Positive close balance → arrears b/d next term.
+     * Overpayment: displayed balance = 0; excess credit reduces next term total.
+     */
+    function getYearTermLedgers(childId, year) {
+      const fees = getChildFees(childId, year);
+      const opening = getYearOpeningArrears(childId, year);
+      const termFees = [fees.term1 || 0, fees.term2 || 0, fees.term3 || 0];
+      const terms = [];
+      let creditFromPrev = 0;
+
+      for (let t = 1; t <= 3; t++) {
+        let arrearsBd = 0;
+        let credit = 0;
+
+        if (t === 1) {
+          if (opening >= 0) {
+            arrearsBd = opening;
+            credit = 0;
+          } else {
+            arrearsBd = 0;
+            credit = -opening; // opening credit into Term 1
+          }
+        } else {
+          arrearsBd = Math.max(0, terms[t - 2].rawBalance);
+          credit = creditFromPrev;
+        }
+
+        const feePayable = termFees[t - 1];
+        const totalPayable = Math.max(0, arrearsBd + feePayable - credit);
+        const payments = getTermPayments(childId, year, t);
+        const totalPaid = sumPayments(payments);
+        const rawBalance = totalPayable - totalPaid; // negative if overpaid
+        const displayBalance = Math.max(0, rawBalance); // show 0 when excess
+        creditFromPrev = rawBalance < 0 ? -rawBalance : 0;
+
+        terms.push({
+          term: t,
+          arrearsBd,
+          feePayable,
+          credit,
+          totalPayable,
+          payments,
+          totalPaid,
+          rawBalance,
+          balance: displayBalance,
+          label: `Term ${t}`
+        });
+      }
+
+      return { year, openingArrears: opening, fees, terms };
     }
 
     function getOverdueInfo(childId, year) {
@@ -238,7 +353,8 @@
     // clear it via calculation only — they no longer mutate the stored amount.
     function setOpeningArrears(childId, year, amount) {
       if (!state.arrears[childId]) state.arrears[childId] = {};
-      state.arrears[childId][year] = Math.max(0, Number(amount) || 0);
+      // Allow negative = credit brought forward
+      state.arrears[childId][year] = Number(amount) || 0;
     }
 
     function setChildFees(childId, year, fees) {
@@ -506,6 +622,129 @@
       return alloc;
     }
 
+    function renderTermPaymentSlots(childId, year, termLedger) {
+      const pays = termLedger.payments;
+      const minSlots = 3;
+      const slotCount = Math.max(minSlots, pays.length);
+      let html = '';
+
+      for (let i = 0; i < slotCount; i++) {
+        const letter = String.fromCharCode(97 + i); // a, b, c...
+        const p = pays[i];
+        if (p) {
+          html += `
+            <div class="ledger-pay-row filled">
+              <div class="ledger-pay-label">${letter}. Payment ${i + 1}</div>
+              <div class="ledger-pay-body">
+                <div class="ledger-pay-main">
+                  <span class="ledger-pay-meta"><strong>Date:</strong> ${p.date}</span>
+                  <span class="amount paid">${formatKES(p.amount)}</span>
+                  <span class="ledger-pay-meta"><strong>Allocation:</strong> ${formatAllocate(p.allocate)}</span>
+                </div>
+                <div class="ledger-pay-actions">
+                  <button type="button" class="btn btn-sm btn-outline" onclick="editPayment('${p.id}')">Edit</button>
+                  <button type="button" class="btn btn-sm btn-danger" onclick="deletePayment('${p.id}')">Delete</button>
+                </div>
+              </div>
+            </div>`;
+        } else {
+          html += `
+            <div class="ledger-pay-row empty-slot" onclick="openPaymentModal('${childId}', 'term${termLedger.term}')">
+              <div class="ledger-pay-label">${letter}. Payment ${i + 1}</div>
+              <div class="ledger-pay-body empty-body">
+                <span class="empty-slot-text">Empty slot — tap to add payment</span>
+              </div>
+            </div>`;
+        }
+      }
+      return html;
+    }
+
+    function renderTermBlock(childId, year, termLedger) {
+      const t = termLedger.term;
+      const arrearsLabel = t === 1
+        ? `Arrears b/d from the previous year ${year - 1}`
+        : `Arrears b/d from Term ${t - 1}`;
+      const excess = termLedger.rawBalance < 0 ? -termLedger.rawBalance : 0;
+      const balClass = termLedger.balance > 0 ? 'amount due' : 'amount paid';
+      let balNote = 'Cleared';
+      if (excess > 0) {
+        balNote = `Balance shown as 0 · excess ${formatKES(excess)} credited to ${t < 3 ? 'Term ' + (t + 1) : 'Term 1 ' + (year + 1)}`;
+      } else if (termLedger.balance > 0) {
+        balNote = t < 3
+          ? `Becomes arrears b/d for Term ${t + 1}`
+          : `Becomes opening arrears for Term 1 ${year + 1}`;
+      }
+
+      // Term 1 opening input: show actual opening (may be negative credit)
+      const openingInputVal = t === 1
+        ? (termLedger.arrearsBd > 0 ? termLedger.arrearsBd : (termLedger.credit > 0 ? -termLedger.credit : 0))
+        : termLedger.arrearsBd;
+
+      return `
+        <section class="term-ledger" id="term-${childId}-${t}">
+          <div class="term-ledger-head">
+            <h4>TERM ${t}</h4>
+            <span class="term-year-tag">${year}</span>
+          </div>
+
+          <div class="ledger-line">
+            <span class="ledger-roman">I.</span>
+            <span class="ledger-desc">${arrearsLabel}${t === 1 ? ' <small>(use negative for credit b/d)</small>' : ''}</span>
+            <span class="ledger-amt">
+              ${t === 1 ? `
+                <input type="number" step="1" class="ledger-input"
+                  value="${openingInputVal}"
+                  onchange="updateOpeningArrearsFromLedger('${childId}', ${year}, this.value)"
+                  title="Opening arrears (positive) or credit (negative) for ${year}">
+              ` : `<strong>${formatKES(termLedger.arrearsBd)}</strong>`}
+            </span>
+          </div>
+
+          <div class="ledger-line">
+            <span class="ledger-roman">II.</span>
+            <span class="ledger-desc">Term ${t} Fee Payable</span>
+            <span class="ledger-amt">
+              <input type="number" min="0" step="1" class="ledger-input"
+                value="${termLedger.feePayable}"
+                onchange="updateTermFeeFromLedger('${childId}', ${year}, ${t}, this.value)"
+                title="Enter Term ${t} fee">
+            </span>
+          </div>
+
+          ${termLedger.credit > 0 ? `
+          <div class="ledger-line credit-line">
+            <span class="ledger-roman"></span>
+            <span class="ledger-desc">Less: credit from previous term / year</span>
+            <span class="ledger-amt amount paid">− ${formatKES(termLedger.credit)}</span>
+          </div>` : ''}
+
+          <div class="ledger-line total-line">
+            <span class="ledger-roman">III.</span>
+            <span class="ledger-desc">Total Fee Payable (I + II${termLedger.credit > 0 ? ' − credit' : ''})</span>
+            <span class="ledger-amt"><strong>${formatKES(termLedger.totalPayable)}</strong></span>
+          </div>
+
+          <div class="ledger-payments">
+            ${renderTermPaymentSlots(childId, year, termLedger)}
+            <button type="button" class="btn btn-sm btn-outline btn-add-pay"
+              onclick="openPaymentModal('${childId}', 'term${t}')">+ Add payment</button>
+          </div>
+
+          <div class="ledger-line total-line">
+            <span class="ledger-roman">IV.</span>
+            <span class="ledger-desc">TOTAL payments made for Term ${t}</span>
+            <span class="ledger-amt amount paid"><strong>${formatKES(termLedger.totalPaid)}</strong></span>
+          </div>
+
+          <div class="ledger-line balance-line">
+            <span class="ledger-roman">V.</span>
+            <span class="ledger-desc">Balance at the close of Term ${t} <small>(${balNote})</small></span>
+            <span class="ledger-amt ${balClass}"><strong>${formatKES(termLedger.balance)}</strong></span>
+          </div>
+        </section>`;
+    }
+
     function renderDetailTabs() {
       const tabs = document.getElementById('childTabs');
       const panels = document.getElementById('detailPanels');
@@ -514,64 +753,36 @@
         activeChildTabId = state.children[0] ? state.children[0].id : null;
       }
       const activeChildId = activeChildTabId;
+      const year = state.year;
 
       tabs.innerHTML = state.children.map((c) =>
         `<button type="button" class="tab ${c.id === activeChildId ? 'active' : ''}" onclick="switchTab('${c.id}')" data-child="${c.id}">${c.name.split(' ')[0]}</button>`
       ).join('');
 
       panels.innerHTML = state.children.map((child) => {
-        const s = getChildSummary(child.id, state.year);
-        const pays = state.payments
+        const ledgers = getYearTermLedgers(child.id, year);
+        const yearPaid = ledgers.terms.reduce((sum, t) => sum + t.totalPaid, 0);
+        const yearClose = ledgers.terms[2].balance;
+        const yearRaw = ledgers.terms[2].rawBalance;
+        const termBlocks = ledgers.terms.map(tl => renderTermBlock(child.id, year, tl)).join('');
+
+        const allPays = state.payments
           .filter(p => p.childId === child.id)
           .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
 
-        const allTimeTotal = sumPayments(pays);
-        const openArrears = Math.max(0, s.arrears - s.arrearsCleared);
-
-        // Desktop table rows
-        const tableRows = pays.length ? pays.map(p => `
-          <tr data-payment-id="${p.id}">
-            <td data-label="Date">${p.date}</td>
-            <td data-label="Amount" class="amount paid">${formatKES(p.amount)}</td>
-            <td data-label="Method">${p.method || '—'}</td>
-            <td data-label="Allocation">${formatAllocate(p.allocate)}</td>
-            <td data-label="Reference">${p.ref || '—'}</td>
-            <td data-label="Notes">${p.notes ? escapeHtml(p.notes) : '—'}</td>
-            <td data-label="Receipt">${p.receiptBase64 ? '<span class="receipt-badge" title="Receipt attached">📎 Yes</span>' : '—'}</td>
-            <td data-label="Actions" class="actions-cell">
-              <button type="button" class="btn btn-sm btn-outline btn-edit" onclick="editPayment('${p.id}')">Edit</button>
-              <button type="button" class="btn btn-sm btn-danger btn-delete" onclick="deletePayment('${p.id}')">Delete</button>
+        const historyRows = allPays.length ? allPays.map(p => `
+          <tr>
+            <td>${p.date}</td>
+            <td class="amount paid">${formatKES(p.amount)}</td>
+            <td>${formatAllocate(p.allocate)}</td>
+            <td>${p.method || '—'}</td>
+            <td>${p.ref || '—'}</td>
+            <td class="actions-cell">
+              <button type="button" class="btn btn-sm btn-outline" onclick="editPayment('${p.id}')">Edit</button>
+              <button type="button" class="btn btn-sm btn-danger" onclick="deletePayment('${p.id}')">Delete</button>
             </td>
           </tr>
-        `).join('') : `<tr><td colspan="8" class="empty-state">No payments recorded for ${child.name.split(' ')[0]} yet.<br><button type="button" class="btn btn-sm btn-primary" style="margin-top:0.75rem" onclick="openPaymentModal('${child.id}')">+ Record first payment</button></td></tr>`;
-
-        // Mobile-friendly payment cards (shown via CSS on small screens)
-        const mobileCards = pays.length ? pays.map(p => `
-          <div class="payment-card" data-payment-id="${p.id}">
-            <div class="payment-card-top">
-              <div>
-                <div class="payment-card-date">${p.date}</div>
-                <div class="payment-card-amount amount paid">${formatKES(p.amount)}</div>
-              </div>
-              <div class="payment-card-actions">
-                <button type="button" class="btn btn-sm btn-outline" onclick="editPayment('${p.id}')">Edit</button>
-                <button type="button" class="btn btn-sm btn-danger" onclick="deletePayment('${p.id}')">Delete</button>
-              </div>
-            </div>
-            <div class="payment-card-meta">
-              <span><strong>Method:</strong> ${p.method || '—'}</span>
-              <span><strong>Allocated:</strong> ${formatAllocate(p.allocate)}</span>
-              ${p.ref ? `<span><strong>Ref:</strong> ${escapeHtml(p.ref)}</span>` : ''}
-              ${p.notes ? `<span><strong>Notes:</strong> ${escapeHtml(p.notes)}</span>` : ''}
-              ${p.receiptBase64 ? '<span class="receipt-badge">📎 Receipt attached</span>' : ''}
-            </div>
-          </div>
-        `).join('') : `
-          <div class="empty-state">
-            No payments recorded for ${child.name.split(' ')[0]} yet.
-            <br>
-            <button type="button" class="btn btn-sm btn-primary" style="margin-top:0.75rem" onclick="openPaymentModal('${child.id}')">+ Record first payment</button>
-          </div>`;
+        `).join('') : `<tr><td colspan="6" class="empty-state">No payments yet for ${child.name.split(' ')[0]}</td></tr>`;
 
         return `
           <div class="panel ${child.id === activeChildId ? 'active' : ''}" id="panel-${child.id}">
@@ -579,7 +790,7 @@
               <div class="child-panel-header">
                 <div>
                   <h3>${child.name}</h3>
-                  <p class="child-panel-sub">${child.school} · ${child.class} · ${state.year}</p>
+                  <p class="child-panel-sub">${child.school} · ${child.class}</p>
                 </div>
                 <div class="child-panel-header-actions">
                   <button type="button" class="btn btn-outline btn-sm" onclick="openFeesArrearsEditor('${child.id}')">Edit Fees & Arrears</button>
@@ -587,55 +798,73 @@
                 </div>
               </div>
 
+              <div class="year-banner">YEAR ${year}</div>
+
               <div class="child-panel-stats">
                 <div class="stat-box">
-                  <div class="stat-label">Yearly Fee</div>
-                  <div class="stat-value">${formatKES(s.fees.yearly)}</div>
+                  <div class="stat-label">Opening Arrears / Credit</div>
+                  <div class="stat-value ${ledgers.openingArrears > 0 ? 'amount due' : (ledgers.openingArrears < 0 ? 'amount paid' : '')}">${formatKES(ledgers.openingArrears)}</div>
                 </div>
                 <div class="stat-box">
-                  <div class="stat-label">Open Arrears</div>
-                  <div class="stat-value ${openArrears > 0 ? 'amount due' : 'amount paid'}">${formatKES(openArrears)}</div>
+                  <div class="stat-label">Year Fees (T1+T2+T3)</div>
+                  <div class="stat-value">${formatKES((ledgers.fees.term1||0)+(ledgers.fees.term2||0)+(ledgers.fees.term3||0))}</div>
                 </div>
                 <div class="stat-box highlight">
-                  <div class="stat-label">Total Payments</div>
-                  <div class="stat-value amount paid">${formatKES(s.paidTotal)}</div>
-                  <div class="stat-hint">${pays.length} entr${pays.length === 1 ? 'y' : 'ies'} · all-time ${formatKES(allTimeTotal)}</div>
+                  <div class="stat-label">Total Payments ${year}</div>
+                  <div class="stat-value amount paid">${formatKES(yearPaid)}</div>
                 </div>
                 <div class="stat-box highlight">
-                  <div class="stat-label">Outstanding Balance</div>
-                  <div class="stat-value ${s.balance > 0 ? 'amount due' : 'amount paid'}">${formatKES(s.balance)}</div>
-                  <div class="stat-hint">${s.balance === 0 ? 'Fully cleared' : 'Still owing'}</div>
+                  <div class="stat-label">Balance end of Term 3</div>
+                  <div class="stat-value ${yearClose > 0 ? 'amount due' : 'amount paid'}">${formatKES(yearClose)}</div>
+                  <div class="stat-hint">${yearRaw < 0 ? 'Credit ' + formatKES(-yearRaw) + ' to Term 1 ' + (year + 1) : (yearClose > 0 ? 'Carries to Term 1 ' + (year + 1) : 'Cleared')}</div>
                 </div>
               </div>
 
-              <h4 class="payment-list-title">Payments for ${child.name.split(' ')[0]}</h4>
-              <p class="payment-list-hint">Date · Amount · Method · Allocation — use Edit or Delete on any row</p>
+              <div class="term-ledgers">
+                ${termBlocks}
+              </div>
 
-              <div class="table-wrap desktop-payments">
+              <h4 class="payment-list-title" style="margin-top:1.5rem">Full payment history — ${child.name.split(' ')[0]}</h4>
+              <p class="payment-list-hint">All payments for this child (any year). Date · Amount · Allocation</p>
+              <div class="table-wrap">
                 <table class="payments-table">
                   <thead>
                     <tr>
                       <th>Date</th>
                       <th>Amount</th>
-                      <th>Method</th>
                       <th>Allocation</th>
+                      <th>Method</th>
                       <th>Reference</th>
-                      <th>Notes</th>
-                      <th>Receipt</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
-                  <tbody>${tableRows}</tbody>
+                  <tbody>${historyRows}</tbody>
                 </table>
-              </div>
-
-              <div class="mobile-payments">
-                ${mobileCards}
               </div>
             </div>
           </div>
         `;
       }).join('');
+    }
+
+    function updateOpeningArrearsFromLedger(childId, year, value) {
+      setOpeningArrears(childId, year, value);
+      saveState();
+      renderAll();
+      showToast(`Opening arrears for ${year} updated.`, 'success');
+    }
+
+    function updateTermFeeFromLedger(childId, year, term, value) {
+      const field = 'term' + term;
+      setChildFees(childId, year, { [field]: value });
+      const child = state.children.find(c => c.id === childId);
+      if (child && child.fees[year]) {
+        const f = child.fees[year];
+        f.yearly = (Number(f.term1) || 0) + (Number(f.term2) || 0) + (Number(f.term3) || 0);
+      }
+      saveState();
+      renderAll();
+      showToast(`Term ${term} fee updated.`, 'success');
     }
 
     function escapeHtml(str) {
@@ -676,7 +905,7 @@
     }
 
     // ===================== ACTIONS =====================
-    function openPaymentModal(childId) {
+    function openPaymentModal(childId, allocateTo) {
       editingPaymentId = null;
       populatePaymentForm();
       if (childId) document.getElementById('payChild').value = childId;
@@ -685,7 +914,9 @@
       document.getElementById('payNotes').value = '';
       document.getElementById('payFile').value = '';
       document.getElementById('payMethod').value = 'M-Pesa';
-      document.getElementById('payAllocate').value = 'arrears';
+      const alloc = allocateTo || 'term1';
+      const allocEl = document.getElementById('payAllocate');
+      if (allocEl) allocEl.value = alloc;
       document.getElementById('payDate').value = todayISO();
       document.getElementById('paymentModalTitle').textContent = 'Record Payment';
       document.getElementById('savePaymentBtn').textContent = 'Save Payment';
@@ -855,12 +1086,17 @@
 
     function switchYear(y) {
       state.year = parseInt(y, 10);
-      // Ensure fee structure exists for new year (copy from nearest)
+      // New year: fees start at 0; arrears/credit auto-carry from prior Term 3 if not set
       state.children.forEach(c => {
         if (!c.fees[state.year]) {
-          const years = Object.keys(c.fees).map(Number).sort((a,b)=>b-a);
-          const src = years[0] || DEFAULT_YEAR;
-          c.fees[state.year] = { ...c.fees[src] };
+          c.fees[state.year] = { yearly: 0, term1: 0, term2: 0, term3: 0 };
+        }
+        const hasArr = state.arrears[c.id] && Object.prototype.hasOwnProperty.call(state.arrears[c.id], state.year);
+        if (!hasArr && state.year > DEFAULT_YEAR) {
+          try {
+            const prev = getYearTermLedgers(c.id, state.year - 1);
+            setOpeningArrears(c.id, state.year, prev.terms[2].rawBalance);
+          } catch (e) { /* ignore */ }
         }
       });
       saveState();

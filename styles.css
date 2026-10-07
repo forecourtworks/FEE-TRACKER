@@ -335,6 +335,181 @@
       margin-top: 0.3rem;
       line-height: 1.35;
     }
+
+    /* Year + term ledgers */
+    .year-banner {
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      color: white;
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: 0.5px;
+      text-align: center;
+      padding: 0.55rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+    }
+    .term-ledgers {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+    .term-ledger {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      background: #fff;
+    }
+    .term-ledger-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid var(--secondary);
+    }
+    .term-ledger-head h4 {
+      margin: 0;
+      font-size: 1rem;
+      color: var(--primary);
+    }
+    .term-year-tag {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .ledger-line {
+      display: grid;
+      grid-template-columns: 2rem 1fr auto;
+      gap: 0.5rem;
+      align-items: center;
+      padding: 0.4rem 0;
+      border-bottom: 1px dashed var(--border);
+      font-size: 0.9rem;
+    }
+    .ledger-line.total-line {
+      background: #f7fafc;
+      margin: 0.35rem -0.5rem;
+      padding: 0.5rem;
+      border-radius: 6px;
+      border-bottom: none;
+      font-weight: 600;
+    }
+    .ledger-line.balance-line {
+      background: #ebf8ff;
+      margin: 0.35rem -0.5rem 0;
+      padding: 0.55rem 0.5rem;
+      border-radius: 6px;
+      border-bottom: none;
+    }
+    .ledger-line.credit-line {
+      color: var(--success);
+    }
+    .ledger-roman {
+      font-weight: 700;
+      color: var(--muted);
+    }
+    .ledger-desc small {
+      display: block;
+      font-weight: 400;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+    .ledger-input {
+      width: 8.5rem;
+      max-width: 40vw;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .ledger-input:focus {
+      outline: none;
+      border-color: var(--secondary);
+      box-shadow: 0 0 0 3px rgba(43,108,176,0.15);
+    }
+    .ledger-payments {
+      margin: 0.65rem 0;
+      padding: 0.5rem 0;
+    }
+    .ledger-pay-row {
+      display: grid;
+      grid-template-columns: 6.5rem 1fr;
+      gap: 0.5rem;
+      padding: 0.55rem 0.4rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 0.45rem;
+      background: #fafbfc;
+    }
+    .ledger-pay-row.filled {
+      background: #f0fff4;
+      border-color: #c6f6d5;
+    }
+    .ledger-pay-row.empty-slot {
+      cursor: pointer;
+      border-style: dashed;
+      background: #fff;
+    }
+    .ledger-pay-row.empty-slot:hover {
+      border-color: var(--secondary);
+      background: #ebf8ff;
+    }
+    .ledger-pay-label {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .ledger-pay-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+    .ledger-pay-main {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1rem;
+      align-items: baseline;
+    }
+    .ledger-pay-meta {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .ledger-pay-extra {
+      font-size: 0.8rem;
+    }
+    .ledger-confirm {
+      background: #edf2f7;
+      padding: 0.35rem 0.5rem;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .ledger-pay-actions {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+    }
+    .empty-body {
+      justify-content: center;
+    }
+    .empty-slot-text {
+      font-size: 0.85rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+    .btn-add-pay {
+      margin-top: 0.25rem;
+      width: 100%;
+      justify-content: center;
+    }
+    .muted-tiny {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
     .child-panel-stats {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -559,6 +734,21 @@
       .desktop-payments { display: none; }
       .mobile-payments { display: block; }
       .header-actions .btn { padding: 0.4rem 0.65rem; font-size: 0.8rem; }
+      .ledger-pay-row {
+        grid-template-columns: 1fr;
+      }
+      .ledger-line {
+        grid-template-columns: 1.75rem 1fr;
+      }
+      .ledger-amt {
+        grid-column: 2;
+        text-align: left;
+      }
+      .ledger-input {
+        width: 100%;
+        max-width: 100%;
+        text-align: left;
+      }
     }
     @media (max-width: 420px) {
       .summary-bar { grid-template-columns: 1fr; }
