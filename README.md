@@ -29,8 +29,10 @@ Offline-first web app for tracking school fees for **Derek Oguta**, **Brian Ogut
 - Due dates: 7th of each school-session month
 - Automatic overdue ageing (0–30 / 31–60 / 61+ days)
 - Payment recording: amount, date, method, transaction reference, notes + optional receipt photo/PDF
+- Edit & delete any existing payment from each child’s Payment History tab
 - Family dashboard + per-child progress cards with progress bars
-- Full payment history table
+- Clickable summary cards (Total Due, Paid, Balance, Arrears) open a per-child breakdown
+- Full payment history table with Actions column
 - PDF statement export (family-wide)
 - Editable fee structures per year
 - Year selector supports historical and future years

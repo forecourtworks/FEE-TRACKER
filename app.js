@@ -46,6 +46,9 @@
       arrears: {}   // { childId: { [year]: amount } }
     };
 
+    // Tracks which payment is being edited (null = new payment)
+    let editingPaymentId = null;
+
     // ===================== UTILITIES =====================
     function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
     function formatKES(n) {
@@ -228,6 +231,27 @@
       return { oldestOverdueDays, overdueAmount, ageing };
     }
 
+    // ===================== ARREARS HELPERS =====================
+    function adjustArrears(childId, year, delta) {
+      if (!state.arrears[childId]) state.arrears[childId] = {};
+      const current = state.arrears[childId][year] || 0;
+      state.arrears[childId][year] = Math.max(0, current + delta);
+    }
+
+    function reverseArrearsEffect(payment) {
+      if (payment && payment.allocate === 'arrears') {
+        const yr = parseInt(payment.date.slice(0, 4), 10) || state.year;
+        adjustArrears(payment.childId, yr, Number(payment.amount || 0));
+      }
+    }
+
+    function applyArrearsEffect(payment) {
+      if (payment && payment.allocate === 'arrears') {
+        const yr = parseInt(payment.date.slice(0, 4), 10) || state.year;
+        adjustArrears(payment.childId, yr, -Number(payment.amount || 0));
+      }
+    }
+
     // ===================== RENDER =====================
     function renderAll() {
       document.getElementById('todayDate').textContent = new Date().toLocaleDateString('en-KE', {
@@ -265,27 +289,118 @@
       const pct = totalDue > 0 ? Math.round((totalPaid / totalDue) * 100) : 100;
 
       document.getElementById('familySummary').innerHTML = `
-        <div class="summary-card">
+        <div class="summary-card clickable" onclick="showSummaryDetail('due')" title="Click for breakdown">
           <h3>Family Total Due (${state.year})</h3>
           <div class="value">${formatKES(totalDue)}</div>
-          <div class="sub">Including arrears</div>
+          <div class="sub">Including arrears · Tap for details</div>
         </div>
-        <div class="summary-card success">
+        <div class="summary-card success clickable" onclick="showSummaryDetail('paid')" title="Click for breakdown">
           <h3>Total Paid</h3>
           <div class="value">${formatKES(totalPaid)}</div>
-          <div class="sub">${pct}% of annual obligation</div>
+          <div class="sub">${pct}% of annual obligation · Tap for details</div>
         </div>
-        <div class="summary-card ${totalBalance > 0 ? 'danger' : 'success'}">
+        <div class="summary-card ${totalBalance > 0 ? 'danger' : 'success'} clickable" onclick="showSummaryDetail('balance')" title="Click for breakdown">
           <h3>Outstanding Balance</h3>
           <div class="value">${formatKES(totalBalance)}</div>
-          <div class="sub">${totalBalance === 0 ? 'All clear' : 'Across all children'}</div>
+          <div class="sub">${totalBalance === 0 ? 'All clear' : 'Across all children'} · Tap for details</div>
         </div>
-        <div class="summary-card warning">
+        <div class="summary-card warning clickable" onclick="showSummaryDetail('arrears')" title="Click for breakdown">
           <h3>Open Arrears</h3>
           <div class="value">${formatKES(totalArrears)}</div>
-          <div class="sub">Carried forward</div>
+          <div class="sub">Carried forward · Tap for details</div>
         </div>
       `;
+    }
+
+    function showSummaryDetail(type) {
+      const titles = {
+        due: 'Family Total Due — Breakdown',
+        paid: 'Total Paid — Breakdown',
+        balance: 'Outstanding Balance — Breakdown',
+        arrears: 'Open Arrears — Breakdown'
+      };
+      document.getElementById('detailTitle').textContent = titles[type] || 'Summary Detail';
+
+      let rows = '';
+      let grand = 0;
+
+      state.children.forEach(c => {
+        const s = getChildSummary(c.id, state.year);
+        let val = 0;
+        let extra = '';
+        if (type === 'due') {
+          val = s.fees.yearly + s.arrears;
+          extra = `Yearly ${formatKES(s.fees.yearly)} + Arrears ${formatKES(s.arrears)}`;
+        } else if (type === 'paid') {
+          val = s.paidTotal;
+          const pays = state.payments.filter(p => p.childId === c.id && (parseInt(p.date.slice(0,4)) === state.year || p.allocate === 'arrears'));
+          extra = `${pays.length} payment${pays.length === 1 ? '' : 's'}`;
+        } else if (type === 'balance') {
+          val = s.balance;
+          extra = s.balance === 0 ? 'Fully paid' : 'Remaining';
+        } else if (type === 'arrears') {
+          val = Math.max(0, s.arrears - s.arrearsCleared);
+          extra = `Original ${formatKES(s.arrears)} · Cleared ${formatKES(s.arrearsCleared)}`;
+        }
+        grand += val;
+        rows += `
+          <tr>
+            <td><strong>${c.name}</strong><br><small style="color:var(--muted)">${c.school}</small></td>
+            <td class="amount ${type === 'paid' ? 'paid' : (val > 0 && type !== 'due' ? 'due' : '')}">${formatKES(val)}</td>
+            <td style="font-size:0.85rem;color:var(--muted)">${extra}</td>
+          </tr>`;
+      });
+
+      // Optional deeper detail for "paid"
+      let paymentList = '';
+      if (type === 'paid') {
+        const allPays = state.payments
+          .filter(p => parseInt(p.date.slice(0,4)) === state.year || p.allocate === 'arrears')
+          .sort((a,b) => b.date.localeCompare(a.date));
+        if (allPays.length) {
+          paymentList = `
+            <h4 style="margin:1.25rem 0 0.5rem">Recent Payments</h4>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Date</th><th>Child</th><th>Amount</th><th>Method</th><th>Allocated</th></tr></thead>
+                <tbody>
+                  ${allPays.slice(0, 15).map(p => {
+                    const child = state.children.find(c => c.id === p.childId);
+                    const alloc = p.allocate === 'arrears' ? 'Arrears' : p.allocate === 'current' ? 'Current Term' : (p.allocate || '').replace('term','Term ');
+                    return `<tr>
+                      <td>${p.date}</td>
+                      <td>${child ? child.name.split(' ')[0] : p.childId}</td>
+                      <td class="amount paid">${formatKES(p.amount)}</td>
+                      <td>${p.method}</td>
+                      <td>${alloc}</td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>`;
+        }
+      }
+
+      document.getElementById('detailBody').innerHTML = `
+        <p style="margin-bottom:1rem;color:var(--muted)">Year ${state.year} · Per-child breakdown</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Child</th><th>Amount</th><th>Detail</th></tr>
+            </thead>
+            <tbody>
+              ${rows}
+              <tr style="font-weight:700;background:#f7fafc">
+                <td>Family Total</td>
+                <td class="amount">${formatKES(grand)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        ${paymentList}
+      `;
+      document.getElementById('detailModal').classList.add('open');
     }
 
     function renderChildCards() {
@@ -343,15 +458,9 @@
                 <span class="term-name">Term ${currentTerm} Balance</span>
                 <span class="amount ${termBal > 0 ? 'due' : 'paid'}">${formatKES(termBal)}</span>
               </div>
-              <div class="term-row" style="margin-top:0.5rem;padding-top:0.75rem;border-top:2px solid var(--border)">
-                <span class="term-name">Total Outstanding</span>
-                <span class="amount ${s.balance > 0 ? 'due' : 'paid'}" style="font-size:1.1rem">${formatKES(s.balance)}</span>
-              </div>
-
               <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
-                <button class="btn btn-primary btn-sm" onclick="openPaymentModal('${child.id}')">+ Payment</button>
-                <button class="btn btn-outline btn-sm" onclick="showChildDetail('${child.id}')">Full History</button>
-                <button class="btn btn-outline btn-sm" onclick="openSettings()">Set Arrears / Fees</button>
+                <button class="btn btn-sm btn-primary" onclick="openPaymentModal('${child.id}')">+ Payment</button>
+                <button class="btn btn-sm btn-outline" onclick="showChildDetail('${child.id}')">Quick View</button>
               </div>
             </div>
           </div>
@@ -362,11 +471,14 @@
     function renderDetailTabs() {
       const tabs = document.getElementById('childTabs');
       const panels = document.getElementById('detailPanels');
-      tabs.innerHTML = state.children.map((c, i) =>
-        `<button class="tab ${i===0?'active':''}" onclick="switchTab('${c.id}')" data-child="${c.id}">${c.name.split(' ')[0]}</button>`
+      const activeTab = document.querySelector('.tab.active');
+      const activeChildId = activeTab ? activeTab.dataset.child : (state.children[0] && state.children[0].id);
+
+      tabs.innerHTML = state.children.map((c) =>
+        `<button class="tab ${c.id === activeChildId ? 'active' : ''}" onclick="switchTab('${c.id}')" data-child="${c.id}">${c.name.split(' ')[0]}</button>`
       ).join('');
 
-      panels.innerHTML = state.children.map((child, i) => {
+      panels.innerHTML = state.children.map((child) => {
         const s = getChildSummary(child.id, state.year);
         const pays = state.payments
           .filter(p => p.childId === child.id)
@@ -378,14 +490,18 @@
             <td class="amount paid">${formatKES(p.amount)}</td>
             <td>${p.method}</td>
             <td>${p.ref || '—'}</td>
-            <td>${p.allocate === 'arrears' ? 'Arrears' : p.allocate === 'current' ? 'Current Term' : p.allocate.replace('term','Term ')}</td>
+            <td>${p.allocate === 'arrears' ? 'Arrears' : p.allocate === 'current' ? 'Current Term' : (p.allocate || '').replace('term','Term ')}</td>
             <td>${p.notes || '—'}</td>
             <td>${p.receiptBase64 ? '<span title="Receipt attached">📎</span>' : '—'}</td>
+            <td class="actions-cell">
+              <button class="btn btn-sm btn-outline" onclick="editPayment('${p.id}')" title="Edit payment">Edit</button>
+              <button class="btn btn-sm btn-danger" onclick="deletePayment('${p.id}')" title="Delete payment">Delete</button>
+            </td>
           </tr>
-        `).join('') : `<tr><td colspan="7" class="empty-state">No payments recorded yet</td></tr>`;
+        `).join('') : `<tr><td colspan="8" class="empty-state">No payments recorded yet</td></tr>`;
 
         return `
-          <div class="panel ${i===0?'active':''}" id="panel-${child.id}">
+          <div class="panel ${child.id === activeChildId ? 'active' : ''}" id="panel-${child.id}">
             <div style="background:var(--card);border-radius:10px;padding:1.25rem;box-shadow:0 1px 3px rgba(0,0,0,0.08)">
               <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:1.25rem">
                 <div><strong>Yearly Fee</strong><br>${formatKES(s.fees.yearly)}</div>
@@ -398,7 +514,7 @@
                 <table>
                   <thead>
                     <tr>
-                      <th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Allocated</th><th>Notes</th><th>Receipt</th>
+                      <th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Allocated</th><th>Notes</th><th>Receipt</th><th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>${rows}</tbody>
@@ -418,22 +534,68 @@
     function populatePaymentForm() {
       const sel = document.getElementById('payChild');
       sel.innerHTML = state.children.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-      document.getElementById('payDate').value = todayISO();
+      if (!editingPaymentId) {
+        document.getElementById('payDate').value = todayISO();
+      }
     }
 
     // ===================== ACTIONS =====================
     function openPaymentModal(childId) {
+      editingPaymentId = null;
       populatePaymentForm();
       if (childId) document.getElementById('payChild').value = childId;
       document.getElementById('payAmount').value = '';
       document.getElementById('payRef').value = '';
       document.getElementById('payNotes').value = '';
       document.getElementById('payFile').value = '';
+      document.getElementById('payMethod').value = 'M-Pesa';
+      document.getElementById('payAllocate').value = 'arrears';
+      document.getElementById('payDate').value = todayISO();
+      document.getElementById('paymentModalTitle').textContent = 'Record Payment';
+      document.getElementById('savePaymentBtn').textContent = 'Save Payment';
       document.getElementById('paymentModal').classList.add('open');
+    }
+
+    function editPayment(paymentId) {
+      const p = state.payments.find(x => x.id === paymentId);
+      if (!p) {
+        alert('Payment not found.');
+        return;
+      }
+      editingPaymentId = paymentId;
+      populatePaymentForm();
+      document.getElementById('payChild').value = p.childId;
+      document.getElementById('payAmount').value = p.amount;
+      document.getElementById('payDate').value = p.date;
+      document.getElementById('payMethod').value = p.method || 'M-Pesa';
+      document.getElementById('payRef').value = p.ref || '';
+      document.getElementById('payAllocate').value = p.allocate || 'current';
+      document.getElementById('payNotes').value = p.notes || '';
+      document.getElementById('payFile').value = '';
+      document.getElementById('paymentModalTitle').textContent = 'Edit Payment';
+      document.getElementById('savePaymentBtn').textContent = 'Update Payment';
+      document.getElementById('paymentModal').classList.add('open');
+    }
+
+    function deletePayment(paymentId) {
+      const p = state.payments.find(x => x.id === paymentId);
+      if (!p) return;
+      const child = state.children.find(c => c.id === p.childId);
+      const label = child ? child.name.split(' ')[0] : p.childId;
+      if (!confirm(`Delete payment of ${formatKES(p.amount)} for ${label} dated ${p.date}?\nThis cannot be undone.`)) {
+        return;
+      }
+      reverseArrearsEffect(p);
+      state.payments = state.payments.filter(x => x.id !== paymentId);
+      saveState();
+      renderAll();
     }
 
     function closeModal(id) {
       document.getElementById(id).classList.remove('open');
+      if (id === 'paymentModal') {
+        editingPaymentId = null;
+      }
     }
 
     function savePayment() {
@@ -451,40 +613,70 @@
         return;
       }
 
-      const payment = {
-        id: uid(),
+      const base = {
         childId,
         amount,
         date,
         method,
         ref,
         allocate,
-        notes,
-        receiptBase64: null,
-        createdAt: new Date().toISOString()
+        notes
       };
 
       if (fileInput.files && fileInput.files[0]) {
         const reader = new FileReader();
         reader.onload = function(e) {
-          payment.receiptBase64 = e.target.result;
-          finalizePayment(payment);
+          base.receiptBase64 = e.target.result;
+          finalizePayment(base);
         };
         reader.readAsDataURL(fileInput.files[0]);
       } else {
-        finalizePayment(payment);
+        // Keep existing receipt when editing if no new file chosen
+        if (editingPaymentId) {
+          const existing = state.payments.find(x => x.id === editingPaymentId);
+          if (existing && existing.receiptBase64) {
+            base.receiptBase64 = existing.receiptBase64;
+          }
+        }
+        finalizePayment(base);
       }
     }
 
-    function finalizePayment(payment) {
-      state.payments.push(payment);
-      // Simple arrears reduction if allocated to arrears
-      if (payment.allocate === 'arrears') {
-        const yr = state.year;
-        if (!state.arrears[payment.childId]) state.arrears[payment.childId] = {};
-        const currentArr = state.arrears[payment.childId][yr] || 0;
-        state.arrears[payment.childId][yr] = Math.max(0, currentArr - payment.amount);
+    function finalizePayment(paymentData) {
+      if (editingPaymentId) {
+        const idx = state.payments.findIndex(x => x.id === editingPaymentId);
+        if (idx === -1) {
+          alert('Original payment not found.');
+          editingPaymentId = null;
+          return;
+        }
+        const old = state.payments[idx];
+        // Reverse old arrears effect, apply new
+        reverseArrearsEffect(old);
+        const updated = {
+          ...old,
+          ...paymentData,
+          id: old.id,
+          createdAt: old.createdAt,
+          updatedAt: new Date().toISOString()
+        };
+        if (!paymentData.receiptBase64 && old.receiptBase64) {
+          updated.receiptBase64 = old.receiptBase64;
+        }
+        state.payments[idx] = updated;
+        applyArrearsEffect(updated);
+        editingPaymentId = null;
+      } else {
+        const payment = {
+          id: uid(),
+          ...paymentData,
+          receiptBase64: paymentData.receiptBase64 || null,
+          createdAt: new Date().toISOString()
+        };
+        state.payments.push(payment);
+        applyArrearsEffect(payment);
       }
+
       saveState();
       closeModal('paymentModal');
       renderAll();
@@ -528,68 +720,50 @@
     function openSettings() {
       const editor = document.getElementById('feeEditor');
       editor.innerHTML = state.children.map(c => {
-        const f = getChildFees(c.id, state.year);
-        const arr = getArrears(c.id, state.year);
+        const f = c.fees[state.year] || { yearly:0, term1:0, term2:0, term3:0 };
         return `
-          <div style="margin-bottom:1.25rem;padding:1rem;background:#f7fafc;border-radius:8px;border:1px solid var(--border)">
-            <strong style="font-size:1rem">${c.name}</strong>
-            <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">${c.school} • ${c.class}</div>
-
-            <div style="margin-bottom:0.75rem;padding:0.6rem;background:#fff7ed;border-radius:6px;border-left:3px solid var(--accent)">
-              <label style="font-weight:700;color:#9a3412">Opening Arrears (KES) — brought forward into ${state.year}</label>
-              <input type="number" min="0" step="1" data-child="${c.id}" data-field="arrears"
-                     value="${arr}" style="width:100%;margin-top:0.35rem;padding:0.5rem;border:1px solid #fdba74;border-radius:6px;font-size:1rem;font-weight:600">
-              <small style="color:var(--muted)">Set any unpaid balance from previous year/term here. Payments allocated to Arrears will reduce this figure.</small>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group" style="margin:0">
-                <label>Term 1 Fee</label>
+          <div style="border:1px solid var(--border);border-radius:8px;padding:0.75rem;margin-bottom:0.75rem">
+            <strong>${c.name}</strong>
+            <div class="form-row" style="margin-top:0.5rem">
+              <div class="form-group">
+                <label>Yearly</label>
+                <input type="number" data-child="${c.id}" data-field="yearly" value="${f.yearly}">
+              </div>
+              <div class="form-group">
+                <label>Term 1</label>
                 <input type="number" data-child="${c.id}" data-field="term1" value="${f.term1}">
               </div>
-              <div class="form-group" style="margin:0">
-                <label>Term 2 Fee</label>
+              <div class="form-group">
+                <label>Term 2</label>
                 <input type="number" data-child="${c.id}" data-field="term2" value="${f.term2}">
               </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group" style="margin:0">
-                <label>Term 3 Fee</label>
+              <div class="form-group">
+                <label>Term 3</label>
                 <input type="number" data-child="${c.id}" data-field="term3" value="${f.term3}">
-              </div>
-              <div class="form-group" style="margin:0">
-                <label>Yearly Total (auto or override)</label>
-                <input type="number" data-child="${c.id}" data-field="yearly" value="${f.yearly}">
               </div>
             </div>
           </div>
         `;
       }).join('');
 
-      // Attach change listeners for fees + arrears
+      // Live-update on change
       editor.querySelectorAll('input').forEach(inp => {
         inp.addEventListener('change', () => {
           const childId = inp.dataset.child;
           const field = inp.dataset.field;
-          const val = Math.max(0, Number(inp.value) || 0);
-
-          if (field === 'arrears') {
-            if (!state.arrears[childId]) state.arrears[childId] = {};
-            state.arrears[childId][state.year] = val;
-            saveState();
-            return;
-          }
-
+          const val = Number(inp.value) || 0;
           const child = state.children.find(c => c.id === childId);
-          if (!child.fees[state.year]) child.fees[state.year] = {};
+          if (!child.fees[state.year]) child.fees[state.year] = { yearly:0, term1:0, term2:0, term3:0 };
           child.fees[state.year][field] = val;
-
-          // Auto-update yearly when a term fee changes
-          if (field.startsWith('term')) {
+          // Keep yearly roughly in sync if terms change
+          if (field !== 'yearly') {
             const f = child.fees[state.year];
-            f.yearly = (Number(f.term1) || 0) + (Number(f.term2) || 0) + (Number(f.term3) || 0);
             const yearlyInp = editor.querySelector(`input[data-child="${childId}"][data-field="yearly"]`);
-            if (yearlyInp) yearlyInp.value = f.yearly;
+            if (yearlyInp) {
+              const sum = (f.term1 || 0) + (f.term2 || 0) + (f.term3 || 0);
+              yearlyInp.value = sum;
+              f.yearly = sum;
+            }
           }
           saveState();
         });
@@ -610,7 +784,7 @@
       const file = evt.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = e => {
+      reader.onload = function(e) {
         try {
           const data = JSON.parse(e.target.result);
           if (data.children && data.payments) {
@@ -622,10 +796,11 @@
             alert('Invalid backup file.');
           }
         } catch (err) {
-          alert('Failed to import: ' + err.message);
+          alert('Could not read file: ' + err.message);
         }
       };
       reader.readAsText(file);
+      evt.target.value = '';
     }
 
     function resetData() {
@@ -637,32 +812,32 @@
       };
       saveState();
       renderAll();
-      closeModal('settingsModal');
     }
 
     function exportPDF() {
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.getWidth();
+      const y0 = 14;
+      let y = y0;
 
       doc.setFontSize(16);
-      doc.setTextColor(26, 54, 93);
-      doc.text('OGUTA Family School Fees Statement', pageWidth / 2, 18, { align: 'center' });
-      doc.setFontSize(10);
-      doc.setTextColor(100);
-      doc.text(`Academic Year ${state.year}  •  Generated ${new Date().toLocaleDateString('en-KE')}`, pageWidth / 2, 25, { align: 'center' });
+      doc.text('OGUTA Family School Fees Statement', 14, y);
+      y += 8;
+      doc.setFontSize(11);
+      doc.text(`Year: ${state.year}  |  Generated: ${todayISO()}`, 14, y);
+      y += 10;
 
-      let y = 35;
-      state.children.forEach((child, idx) => {
-        if (y > 250) { doc.addPage(); y = 20; }
+      state.children.forEach(child => {
         const s = getChildSummary(child.id, state.year);
         doc.setFontSize(12);
-        doc.setTextColor(26, 54, 93);
-        doc.text(`${child.name} — ${child.school}`, 14, y);
+        doc.setFont(undefined, 'bold');
+        doc.text(child.name, 14, y);
         y += 6;
-        doc.setFontSize(9);
-        doc.setTextColor(60);
-        doc.text(`Class: ${child.class}  |  Yearly: ${formatKES(s.fees.yearly)}  |  Arrears: ${formatKES(s.arrears)}  |  Paid: ${formatKES(s.paidTotal)}  |  Balance: ${formatKES(s.balance)}`, 14, y);
+        doc.setFont(undefined, 'normal');
+        doc.setFontSize(10);
+        doc.text(`${child.school} · ${child.class}`, 14, y);
+        y += 5;
+        doc.text(`Yearly: ${formatKES(s.fees.yearly)}  |  Arrears: ${formatKES(s.arrears)}  |  Paid: ${formatKES(s.paidTotal)}  |  Balance: ${formatKES(s.balance)}`, 14, y);
         y += 8;
 
         const pays = state.payments
@@ -670,33 +845,33 @@
           .sort((a,b) => a.date.localeCompare(b.date));
 
         if (pays.length) {
-          const body = pays.map(p => [
-            p.date,
-            formatKES(p.amount),
-            p.method,
-            p.ref || '—',
-            p.allocate === 'arrears' ? 'Arrears' : p.allocate
-          ]);
           doc.autoTable({
             startY: y,
-            head: [['Date', 'Amount', 'Method', 'Reference', 'Allocated']],
-            body,
-            theme: 'striped',
-            headStyles: { fillColor: [26, 54, 93], fontSize: 8 },
-            bodyStyles: { fontSize: 8 },
+            head: [['Date', 'Amount', 'Method', 'Ref', 'Allocated', 'Notes']],
+            body: pays.map(p => [
+              p.date,
+              formatKES(p.amount),
+              p.method,
+              p.ref || '—',
+              p.allocate === 'arrears' ? 'Arrears' : p.allocate === 'current' ? 'Current' : (p.allocate || '').replace('term','T'),
+              (p.notes || '').slice(0, 40)
+            ]),
             margin: { left: 14, right: 14 },
-            styles: { cellPadding: 2 }
+            styles: { fontSize: 8 },
+            headStyles: { fillColor: [26, 54, 93] }
           });
-          y = doc.lastAutoTable.finalY + 12;
+          y = doc.lastAutoTable.finalY + 10;
         } else {
           doc.text('No payments recorded.', 14, y);
-          y += 12;
+          y += 10;
+        }
+
+        if (y > 260) {
+          doc.addPage();
+          y = 14;
         }
       });
 
-      doc.setFontSize(8);
-      doc.setTextColor(150);
-      doc.text('OGUTA Family Fees Tracker — For internal family use only', pageWidth / 2, doc.internal.pageSize.getHeight() - 10, { align: 'center' });
       doc.save(`OGUTA-Fees-Statement-${state.year}-${todayISO()}.pdf`);
     }
 

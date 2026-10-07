@@ -56,7 +56,7 @@
   <div class="modal-overlay" id="paymentModal">
     <div class="modal">
       <div class="modal-header">
-        <h3>Record Payment</h3>
+        <h3 id="paymentModalTitle">Record Payment</h3>
         <button class="btn btn-sm btn-outline" onclick="closeModal('paymentModal')">✕</button>
       </div>
       <div class="modal-body">
@@ -113,7 +113,7 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="closeModal('paymentModal')">Cancel</button>
-        <button class="btn btn-success" onclick="savePayment()">Save Payment</button>
+        <button class="btn btn-success" id="savePaymentBtn" onclick="savePayment()">Save Payment</button>
       </div>
     </div>
   </div>
@@ -150,11 +150,11 @@
     </div>
   </div>
 
-  <!-- Child Detail Modal (quick view) -->
+  <!-- Detail / Summary Modal -->
   <div class="modal-overlay" id="detailModal">
-    <div class="modal" style="max-width:640px">
+    <div class="modal" style="max-width:720px">
       <div class="modal-header">
-        <h3 id="detailTitle">Child Detail</h3>
+        <h3 id="detailTitle">Detail</h3>
         <button class="btn btn-sm btn-outline" onclick="closeModal('detailModal')">✕</button>
       </div>
       <div class="modal-body" id="detailBody"></div>
