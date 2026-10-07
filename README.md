@@ -30,11 +30,13 @@ Offline-first web app for tracking school fees for **Derek Oguta**, **Brian Ogut
 - Automatic overdue ageing (0–30 / 31–60 / 61+ days)
 - Payment recording: amount, date, method, transaction reference, notes + optional receipt photo/PDF
 - Edit & delete any existing payment from each child’s Payment History tab
+- Edit opening arrears and all fee payable figures (yearly + Term 1/2/3) per child
+- Clear fees & arrears (set to 0) without deleting payment history
 - Family dashboard + per-child progress cards with progress bars
 - Clickable summary cards (Total Due, Paid, Balance, Arrears) open a per-child breakdown
 - Full payment history table with Actions column
 - PDF statement export (family-wide)
-- Editable fee structures per year
+- Editable fee structures per year (Settings or per-child “Edit Fees & Arrears”)
 - Year selector supports historical and future years
 - JSON backup / restore for multi-device or multi-user sharing
 

@@ -291,6 +291,11 @@
       margin-bottom: 1rem;
       flex-wrap: wrap;
     }
+    .child-panel-header-actions {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+    }
     .child-panel-header h3 {
       font-size: 1.15rem;
       margin: 0;
@@ -299,6 +304,36 @@
       font-size: 0.85rem;
       color: var(--muted);
       margin-top: 0.2rem;
+    }
+    .fee-edit-block {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      background: #fafbfc;
+    }
+    .fee-edit-block-header {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      margin-bottom: 0.85rem;
+    }
+    .fee-edit-sub {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .fee-edit-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    .field-hint {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.3rem;
+      line-height: 1.35;
     }
     .child-panel-stats {
       display: grid;

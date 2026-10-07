@@ -234,24 +234,51 @@
     }
 
     // ===================== ARREARS HELPERS =====================
-    function adjustArrears(childId, year, delta) {
+    // Opening arrears is a user-set figure. Payments allocated to "arrears"
+    // clear it via calculation only — they no longer mutate the stored amount.
+    function setOpeningArrears(childId, year, amount) {
       if (!state.arrears[childId]) state.arrears[childId] = {};
-      const current = state.arrears[childId][year] || 0;
-      state.arrears[childId][year] = Math.max(0, current + delta);
+      state.arrears[childId][year] = Math.max(0, Number(amount) || 0);
     }
 
-    function reverseArrearsEffect(payment) {
-      if (payment && payment.allocate === 'arrears') {
-        const yr = parseInt(payment.date.slice(0, 4), 10) || state.year;
-        adjustArrears(payment.childId, yr, Number(payment.amount || 0));
-      }
+    function setChildFees(childId, year, fees) {
+      const child = state.children.find(c => c.id === childId);
+      if (!child) return;
+      if (!child.fees[year]) child.fees[year] = { yearly: 0, term1: 0, term2: 0, term3: 0 };
+      const f = child.fees[year];
+      if (fees.yearly !== undefined) f.yearly = Math.max(0, Number(fees.yearly) || 0);
+      if (fees.term1 !== undefined) f.term1 = Math.max(0, Number(fees.term1) || 0);
+      if (fees.term2 !== undefined) f.term2 = Math.max(0, Number(fees.term2) || 0);
+      if (fees.term3 !== undefined) f.term3 = Math.max(0, Number(fees.term3) || 0);
     }
 
-    function applyArrearsEffect(payment) {
-      if (payment && payment.allocate === 'arrears') {
-        const yr = parseInt(payment.date.slice(0, 4), 10) || state.year;
-        adjustArrears(payment.childId, yr, -Number(payment.amount || 0));
-      }
+    // No-ops kept so older call sites remain safe (payments do not change opening arrears)
+    function reverseArrearsEffect() { /* opening arrears is independent of payments */ }
+    function applyArrearsEffect() { /* opening arrears is independent of payments */ }
+
+    // One-time migration: restore opening arrears if older builds reduced the stored figure on payment
+    function migrateOpeningArrears() {
+      if (state._arrearsMigrated) return;
+      state.children.forEach(c => {
+        const yearKeys = Object.keys(state.arrears[c.id] || {}).map(Number);
+        const payYears = state.payments
+          .filter(p => p.childId === c.id)
+          .map(p => parseInt(p.date.slice(0, 4), 10))
+          .filter(Boolean);
+        const years = new Set([state.year, ...yearKeys, ...payYears]);
+        years.forEach(yr => {
+          if (!yr) return;
+          const stored = getArrears(c.id, yr);
+          const paidToArrears = state.payments
+            .filter(p => p.childId === c.id && p.allocate === 'arrears' && parseInt(p.date.slice(0, 4), 10) === yr)
+            .reduce((s, p) => s + Number(p.amount || 0), 0);
+          if (paidToArrears > 0) {
+            setOpeningArrears(c.id, yr, stored + paidToArrears);
+          }
+        });
+      });
+      state._arrearsMigrated = true;
+      saveState();
     }
 
     // ===================== RENDER =====================
@@ -462,6 +489,7 @@
               </div>
               <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
                 <button class="btn btn-sm btn-primary" onclick="openPaymentModal('${child.id}')">+ Payment</button>
+                <button class="btn btn-sm btn-outline" onclick="openFeesArrearsEditor('${child.id}')">Edit Fees & Arrears</button>
                 <button class="btn btn-sm btn-outline" onclick="showChildDetail('${child.id}')">Quick View</button>
               </div>
             </div>
@@ -553,7 +581,10 @@
                   <h3>${child.name}</h3>
                   <p class="child-panel-sub">${child.school} · ${child.class} · ${state.year}</p>
                 </div>
-                <button type="button" class="btn btn-primary btn-sm" onclick="openPaymentModal('${child.id}')">+ Payment</button>
+                <div class="child-panel-header-actions">
+                  <button type="button" class="btn btn-outline btn-sm" onclick="openFeesArrearsEditor('${child.id}')">Edit Fees & Arrears</button>
+                  <button type="button" class="btn btn-primary btn-sm" onclick="openPaymentModal('${child.id}')">+ Payment</button>
+                </div>
               </div>
 
               <div class="child-panel-stats">
@@ -836,59 +867,140 @@
       renderAll();
     }
 
-    function openSettings() {
-      const editor = document.getElementById('feeEditor');
-      editor.innerHTML = state.children.map(c => {
-        const f = c.fees[state.year] || { yearly:0, term1:0, term2:0, term3:0 };
+    function buildFeesArrearsEditorHTML(focusChildId) {
+      const list = focusChildId
+        ? state.children.filter(c => c.id === focusChildId)
+        : state.children;
+
+      return list.map(c => {
+        const f = c.fees[state.year] || { yearly: 0, term1: 0, term2: 0, term3: 0 };
+        const arr = getArrears(c.id, state.year);
+        const s = getChildSummary(c.id, state.year);
+        const openArr = Math.max(0, s.arrears - s.arrearsCleared);
         return `
-          <div style="border:1px solid var(--border);border-radius:8px;padding:0.75rem;margin-bottom:0.75rem">
-            <strong>${c.name}</strong>
-            <div class="form-row" style="margin-top:0.5rem">
+          <div class="fee-edit-block" data-child="${c.id}">
+            <div class="fee-edit-block-header">
+              <strong>${c.name}</strong>
+              <span class="fee-edit-sub">${c.school} · ${state.year}</span>
+            </div>
+
+            <div class="form-group">
+              <label>Opening Arrears (brought forward) — KES</label>
+              <input type="number" min="0" step="1" data-child="${c.id}" data-kind="arrears" value="${arr}">
+              <small class="field-hint">This is the full arrears figure for ${state.year}. Payments allocated to “Arrears” clear it automatically (open now: ${formatKES(openArr)}). Set to 0 to clear.</small>
+            </div>
+
+            <div class="form-row">
               <div class="form-group">
-                <label>Yearly</label>
-                <input type="number" data-child="${c.id}" data-field="yearly" value="${f.yearly}">
+                <label>Yearly Fee Payable</label>
+                <input type="number" min="0" step="1" data-child="${c.id}" data-kind="fee" data-field="yearly" value="${f.yearly}">
               </div>
               <div class="form-group">
                 <label>Term 1</label>
-                <input type="number" data-child="${c.id}" data-field="term1" value="${f.term1}">
+                <input type="number" min="0" step="1" data-child="${c.id}" data-kind="fee" data-field="term1" value="${f.term1}">
               </div>
+            </div>
+            <div class="form-row">
               <div class="form-group">
                 <label>Term 2</label>
-                <input type="number" data-child="${c.id}" data-field="term2" value="${f.term2}">
+                <input type="number" min="0" step="1" data-child="${c.id}" data-kind="fee" data-field="term2" value="${f.term2}">
               </div>
               <div class="form-group">
                 <label>Term 3</label>
-                <input type="number" data-child="${c.id}" data-field="term3" value="${f.term3}">
+                <input type="number" min="0" step="1" data-child="${c.id}" data-kind="fee" data-field="term3" value="${f.term3}">
               </div>
+            </div>
+
+            <div class="fee-edit-actions">
+              <button type="button" class="btn btn-sm btn-outline" onclick="syncYearlyFromTerms('${c.id}')">Sum terms → Yearly</button>
+              <button type="button" class="btn btn-sm btn-danger" onclick="clearFeesAndArrears('${c.id}')">Clear fees & arrears (set 0)</button>
             </div>
           </div>
         `;
       }).join('');
+    }
 
-      // Live-update on change
-      editor.querySelectorAll('input').forEach(inp => {
+    function wireFeesArrearsInputs(container) {
+      container.querySelectorAll('input[data-kind]').forEach(inp => {
         inp.addEventListener('change', () => {
           const childId = inp.dataset.child;
-          const field = inp.dataset.field;
-          const val = Number(inp.value) || 0;
-          const child = state.children.find(c => c.id === childId);
-          if (!child.fees[state.year]) child.fees[state.year] = { yearly:0, term1:0, term2:0, term3:0 };
-          child.fees[state.year][field] = val;
-          // Keep yearly roughly in sync if terms change
-          if (field !== 'yearly') {
-            const f = child.fees[state.year];
-            const yearlyInp = editor.querySelector(`input[data-child="${childId}"][data-field="yearly"]`);
-            if (yearlyInp) {
-              const sum = (f.term1 || 0) + (f.term2 || 0) + (f.term3 || 0);
-              yearlyInp.value = sum;
-              f.yearly = sum;
+          const kind = inp.dataset.kind;
+          const val = Math.max(0, Number(inp.value) || 0);
+          inp.value = val;
+          if (kind === 'arrears') {
+            setOpeningArrears(childId, state.year, val);
+          } else if (kind === 'fee') {
+            const field = inp.dataset.field;
+            setChildFees(childId, state.year, { [field]: val });
+            if (field !== 'yearly') {
+              const child = state.children.find(c => c.id === childId);
+              const f = child.fees[state.year];
+              const yearlyInp = container.querySelector(`input[data-child="${childId}"][data-field="yearly"]`);
+              // Do not auto-overwrite yearly unless user uses the Sum button — keeps manual yearly free
             }
           }
           saveState();
         });
       });
+    }
 
+    function syncYearlyFromTerms(childId) {
+      const child = state.children.find(c => c.id === childId);
+      if (!child || !child.fees[state.year]) return;
+      const f = child.fees[state.year];
+      const sum = (Number(f.term1) || 0) + (Number(f.term2) || 0) + (Number(f.term3) || 0);
+      f.yearly = sum;
+      saveState();
+      const yearlyInp = document.querySelector(`input[data-child="${childId}"][data-field="yearly"]`);
+      if (yearlyInp) yearlyInp.value = sum;
+      showToast(`Yearly fee for ${child.name.split(' ')[0]} set to ${formatKES(sum)}.`, 'success');
+    }
+
+    function clearFeesAndArrears(childId) {
+      const child = state.children.find(c => c.id === childId);
+      if (!child) return;
+      if (!confirm(`Set all fee amounts and opening arrears for ${child.name} (${state.year}) to 0?\nPayments already recorded are kept.`)) return;
+      setChildFees(childId, state.year, { yearly: 0, term1: 0, term2: 0, term3: 0 });
+      setOpeningArrears(childId, state.year, 0);
+      saveState();
+      // Refresh open editors
+      const settingsEditor = document.getElementById('feeEditor');
+      if (settingsEditor && document.getElementById('settingsModal').classList.contains('open')) {
+        settingsEditor.innerHTML = buildFeesArrearsEditorHTML();
+        wireFeesArrearsInputs(settingsEditor);
+      }
+      const feesBody = document.getElementById('feesArrearsBody');
+      if (feesBody && document.getElementById('feesArrearsModal').classList.contains('open')) {
+        feesBody.innerHTML = buildFeesArrearsEditorHTML(childId);
+        wireFeesArrearsInputs(feesBody);
+      }
+      showToast(`Fees & arrears cleared for ${child.name.split(' ')[0]}.`, 'danger');
+      renderAll();
+    }
+
+    function openSettings() {
+      const editor = document.getElementById('feeEditor');
+      editor.innerHTML = buildFeesArrearsEditorHTML();
+      wireFeesArrearsInputs(editor);
       document.getElementById('settingsModal').classList.add('open');
+    }
+
+    function openFeesArrearsEditor(childId) {
+      const child = state.children.find(c => c.id === childId);
+      document.getElementById('feesArrearsTitle').textContent = child
+        ? `Edit Fees & Arrears — ${child.name}`
+        : 'Edit Fees & Arrears';
+      const body = document.getElementById('feesArrearsBody');
+      body.innerHTML = buildFeesArrearsEditorHTML(childId || null);
+      wireFeesArrearsInputs(body);
+      document.getElementById('feesArrearsModal').classList.add('open');
+    }
+
+    function saveFeesArrearsModal() {
+      // Values already saved on change; close and refresh
+      closeModal('feesArrearsModal');
+      renderAll();
+      showToast('Fees & arrears updated.', 'success');
     }
 
     function exportData() {
@@ -996,6 +1108,7 @@
 
     // ===================== INIT =====================
     loadState();
+    migrateOpeningArrears();
     renderAll();
 
     // Close modals on overlay click

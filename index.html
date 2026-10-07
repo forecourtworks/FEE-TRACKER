@@ -120,16 +120,16 @@
 
   <!-- Settings Modal -->
   <div class="modal-overlay" id="settingsModal">
-    <div class="modal">
+    <div class="modal" style="max-width:640px">
       <div class="modal-header">
         <h3>Settings & Data</h3>
         <button class="btn btn-sm btn-outline" onclick="closeModal('settingsModal')">✕</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label>Edit Fee Structure (selected year)</label>
+          <label>Edit fees payable & opening arrears</label>
           <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem">
-            Changes apply only to the currently selected year. Use carefully.
+            Change any pre-filled figure below. Opening arrears and term/yearly fees are fully editable. Set a field to 0 to clear it. Changes apply to the year selected in the header.
           </p>
           <div id="feeEditor"></div>
         </div>
@@ -158,6 +158,21 @@
         <button class="btn btn-sm btn-outline" onclick="closeModal('detailModal')">✕</button>
       </div>
       <div class="modal-body" id="detailBody"></div>
+    </div>
+  </div>
+
+  <!-- Fees & Arrears editor (per child or all) -->
+  <div class="modal-overlay" id="feesArrearsModal">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-header">
+        <h3 id="feesArrearsTitle">Edit Fees & Arrears</h3>
+        <button class="btn btn-sm btn-outline" onclick="closeModal('feesArrearsModal')">✕</button>
+      </div>
+      <div class="modal-body" id="feesArrearsBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeModal('feesArrearsModal')">Cancel</button>
+        <button class="btn btn-success" onclick="saveFeesArrearsModal()">Save &amp; Close</button>
+      </div>
     </div>
   </div>
 
